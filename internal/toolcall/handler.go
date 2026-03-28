@@ -18,6 +18,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/user"
+	"github.com/team-dang/aiseebackend/internal/volunteer"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -37,6 +38,7 @@ type Handler struct {
 	appointment *appointment.Service
 	emergency   *emergency.Service
 	music       *music.Service
+	volunteer   *volunteer.Service
 	queries     *dbgen.Queries
 }
 
@@ -49,6 +51,7 @@ func NewHandler(
 	aptSvc *appointment.Service,
 	emergSvc *emergency.Service,
 	musicSvc *music.Service,
+	volSvc *volunteer.Service,
 	queries *dbgen.Queries,
 ) *Handler {
 	return &Handler{
@@ -60,6 +63,7 @@ func NewHandler(
 		appointment: aptSvc,
 		emergency:   emergSvc,
 		music:       musicSvc,
+		volunteer:   volSvc,
 		queries:     queries,
 	}
 }
@@ -127,6 +131,12 @@ func (h *Handler) dispatch(
 		return h.handleEscalateToFamily(ctx, req)
 	case "play_music":
 		return h.handlePlayMusic(ctx, req)
+	case "escalate_to_volunteer":
+		return h.handleEscalateToVolunteer(ctx, req)
+	case "rate_volunteer":
+		return h.handleRateVolunteer(ctx, req)
+	case "update_location":
+		return h.handleUpdateLocation(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
@@ -593,6 +603,78 @@ func (h *Handler) handlePlayMusic(
 				"title": result.Title,
 			},
 		},
+	}, nil
+}
+
+func (h *Handler) handleEscalateToVolunteer(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	result, err := h.volunteer.StartMatch(ctx, req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"start volunteer match: %w", err,
+		)
+	}
+	return map[string]any{
+		"status":   "searching",
+		"match_id": result.MatchID,
+		"poll_url": "/api/v1/volunteers/match/" +
+			result.MatchID + "/status",
+	}, nil
+}
+
+func (h *Handler) handleRateVolunteer(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	matchID, _ := req.Params["match_id"].(string)
+	score, _ := req.Params["score"].(float64)
+	volunteerID, _ := req.Params["volunteer_id"].(string)
+
+	if matchID == "" || volunteerID == "" ||
+		score < 1 || score > 5 {
+		return nil, fmt.Errorf(
+			"match_id, volunteer_id, and score (1-5) required",
+		)
+	}
+
+	if err := h.volunteer.Rate(
+		ctx, volunteerID, req.UserID,
+		matchID, int16(score),
+	); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"status": "rated",
+		"score":  int(score),
+	}, nil
+}
+
+func (h *Handler) handleUpdateLocation(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	lat, _ := req.Params["lat"].(float64)
+	lng, _ := req.Params["lng"].(float64)
+
+	uid, err := pgutil.ParsePgUUID(req.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.queries.UpdateUserLocation(
+		ctx, dbgen.UpdateUserLocationParams{
+			ID:      uid,
+			LastLat: pgtype.Float8{Float64: lat, Valid: true},
+			LastLng: pgtype.Float8{Float64: lng, Valid: true},
+		},
+	); err != nil {
+		return nil, fmt.Errorf("update location: %w", err)
+	}
+
+	return map[string]any{
+		"status": "location_updated",
+		"lat":    lat,
+		"lng":    lng,
 	}, nil
 }
 
