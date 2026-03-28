@@ -57,17 +57,15 @@ func NewService(q Querier) *Service {
 
 // --- Response types ---
 
-type AdherenceEntry struct {
-	MedicationID string `json:"medication_id"`
-	Taken        bool   `json:"taken"`
-	Skipped      bool   `json:"skipped"`
+type MedWithAdherence struct {
+	Medication dbgen.Medication `json:"medication"`
+	TakenToday bool             `json:"taken_today"`
 }
 
 type HealthResponse struct {
-	Medications []dbgen.Medication   `json:"medications"`
-	Adherence   []AdherenceEntry     `json:"adherence"`
-	Symptoms    []dbgen.HealthSymptom `json:"symptoms"`
-	Metrics     []dbgen.HealthMetric  `json:"metrics"`
+	Medications    []MedWithAdherence    `json:"medications"`
+	RecentSymptoms []dbgen.HealthSymptom `json:"recent_symptoms"`
+	RecentMetrics  []dbgen.HealthMetric  `json:"recent_metrics"`
 }
 
 type MedStatus struct {
@@ -123,22 +121,22 @@ func (s *Service) Health(
 	}
 
 	takenSet := make(map[pgtype.UUID]bool)
-	skippedSet := make(map[pgtype.UUID]bool)
 	for _, log := range logs {
-		if log.Skipped.Valid && log.Skipped.Bool {
-			skippedSet[log.MedicationID] = true
-		} else {
+		if !(log.Skipped.Valid && log.Skipped.Bool) {
 			takenSet[log.MedicationID] = true
 		}
 	}
 
-	adherence := make([]AdherenceEntry, 0, len(meds))
+	medsWithAdherence := make(
+		[]MedWithAdherence, 0, len(meds),
+	)
 	for _, med := range meds {
-		adherence = append(adherence, AdherenceEntry{
-			MedicationID: pgutil.PgUUIDToString(med.ID),
-			Taken:        takenSet[med.ID],
-			Skipped:      skippedSet[med.ID],
-		})
+		medsWithAdherence = append(
+			medsWithAdherence, MedWithAdherence{
+				Medication: med,
+				TakenToday: takenSet[med.ID],
+			},
+		)
 	}
 
 	symptoms, err := s.q.GetRecentSymptoms(
@@ -162,10 +160,9 @@ func (s *Service) Health(
 	}
 
 	return HealthResponse{
-		Medications: meds,
-		Adherence:   adherence,
-		Symptoms:    symptoms,
-		Metrics:     metrics,
+		Medications:    medsWithAdherence,
+		RecentSymptoms: symptoms,
+		RecentMetrics:  metrics,
 	}, nil
 }
 
@@ -289,7 +286,7 @@ func (s *Service) CreateMedication(
 
 	s.logFamilyAudit(
 		ctx, userID, familyID,
-		"dashboard.create_medication",
+		"family_create_medication",
 		map[string]any{
 			"name":   req.Name,
 			"dosage": req.Dosage,
@@ -336,7 +333,7 @@ func (s *Service) UpdateMedication(
 
 	s.logFamilyAudit(
 		ctx, userID, familyID,
-		"dashboard.update_medication",
+		"family_update_medication",
 		map[string]any{
 			"medication_id": medID,
 			"name":          req.Name,
@@ -372,7 +369,7 @@ func (s *Service) DeleteMedication(
 
 	s.logFamilyAudit(
 		ctx, userID, familyID,
-		"dashboard.delete_medication",
+		"family_delete_medication",
 		map[string]any{"medication_id": medID},
 	)
 
@@ -394,11 +391,15 @@ func (s *Service) logFamilyAudit(
 		return
 	}
 
-	params["family_id"] = familyID
-	params["timestamp"] = time.Now().UTC().Format(
+	merged := make(map[string]any, len(params)+2)
+	for k, v := range params {
+		merged[k] = v
+	}
+	merged["family_id"] = familyID
+	merged["timestamp"] = time.Now().UTC().Format(
 		time.RFC3339,
 	)
-	raw, err := json.Marshal(params)
+	raw, err := json.Marshal(merged)
 	if err != nil {
 		slog.Error("audit: marshal params", "error", err)
 		return

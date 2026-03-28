@@ -103,7 +103,11 @@ func (h *Handler) AuditLog(
 		)
 		return
 	}
-	response.JSON(w, http.StatusOK, logs)
+	response.JSON(w, http.StatusOK, map[string]any{
+		"logs":  logs,
+		"page":  page,
+		"limit": limit,
+	})
 }
 
 func (h *Handler) Location(

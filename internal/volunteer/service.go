@@ -323,9 +323,7 @@ func (s *Service) GetMatchStatus(
 	}
 
 	if len(vals) == 0 {
-		return MatchStatus{}, fmt.Errorf(
-			"match %s not found", matchID,
-		)
+		return MatchStatus{Status: "not_found"}, nil
 	}
 
 	return MatchStatus{

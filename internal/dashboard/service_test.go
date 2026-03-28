@@ -109,9 +109,10 @@ func TestHealth_ReturnsMedicationsAndSymptoms(t *testing.T) {
 			"want 1 medication, got %d", len(resp.Medications),
 		)
 	}
-	if len(resp.Symptoms) != 1 {
+	if len(resp.RecentSymptoms) != 1 {
 		t.Errorf(
-			"want 1 symptom, got %d", len(resp.Symptoms),
+			"want 1 symptom, got %d",
+			len(resp.RecentSymptoms),
 		)
 	}
 }
@@ -141,14 +142,14 @@ func TestHealth_AdherenceFromLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Health() error: %v", err)
 	}
-	if len(resp.Adherence) != 1 {
+	if len(resp.Medications) != 1 {
 		t.Fatalf(
-			"want 1 adherence entry, got %d",
-			len(resp.Adherence),
+			"want 1 medication entry, got %d",
+			len(resp.Medications),
 		)
 	}
-	if !resp.Adherence[0].Taken {
-		t.Error("want taken=true for non-skipped log")
+	if !resp.Medications[0].TakenToday {
+		t.Error("want taken_today=true for non-skipped log")
 	}
 }
 
