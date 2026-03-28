@@ -1,9 +1,12 @@
 package livekit
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/livekit/protocol/auth"
+	lkproto "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -33,4 +36,28 @@ func (c *Client) CreateToken(roomName, identity, name string) (string, error) {
 
 func (c *Client) RoomClient() *lksdk.RoomServiceClient {
 	return lksdk.NewRoomServiceClient(c.host, c.apiKey, c.apiSecret)
+}
+
+func (c *Client) CreateRoom(
+	ctx context.Context, roomName string,
+) error {
+	_, err := c.RoomClient().CreateRoom(
+		ctx, &lkproto.CreateRoomRequest{Name: roomName},
+	)
+	if err != nil {
+		return fmt.Errorf("create room %s: %w", roomName, err)
+	}
+	return nil
+}
+
+func (c *Client) DeleteRoom(
+	ctx context.Context, roomName string,
+) error {
+	_, err := c.RoomClient().DeleteRoom(
+		ctx, &lkproto.DeleteRoomRequest{Room: roomName},
+	)
+	if err != nil {
+		return fmt.Errorf("delete room %s: %w", roomName, err)
+	}
+	return nil
 }

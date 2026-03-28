@@ -68,3 +68,36 @@ func (h *Handler) JoinFamily(w http.ResponseWriter, r *http.Request) {
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"status": "joined"})
 }
+
+type UpdateMeRequest struct {
+	DisplayName   string `json:"display_name"`
+	AvatarURL     string `json:"avatar_url"`
+	FcmToken      string `json:"fcm_token"`
+	ApnsToken     string `json:"apns_token"`
+	ApnsVoipToken string `json:"apns_voip_token"`
+	Settings      any    `json:"settings"`
+}
+
+func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	var req UpdateMeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Err(
+			w, http.StatusBadRequest,
+			"invalid_body", "Invalid request body",
+		)
+		return
+	}
+
+	user, err := h.service.UpdateProfile(
+		r.Context(), userID, req,
+	)
+	if err != nil {
+		response.Err(
+			w, http.StatusInternalServerError,
+			"update_failed", "Failed to update profile",
+		)
+		return
+	}
+	response.JSON(w, http.StatusOK, user)
+}

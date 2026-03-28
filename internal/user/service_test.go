@@ -1,0 +1,49 @@
+package user
+
+import (
+	"testing"
+)
+
+func TestNormalizeVietnamese(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Con Gái", "con gai"},
+		{"Nguyễn Văn A", "nguyen van a"},
+		{"mẹ", "me"},
+		{"Chồng", "chong"},
+		{"Lan", "lan"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeVietnamese(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeVietnamese(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestMatchContact(t *testing.T) {
+	tests := []struct {
+		query        string
+		displayName  string
+		relationship string
+		want         bool
+	}{
+		{"con gái", "Lan", "con gái", true},
+		{"Lan", "Lan", "con gái", true},
+		{"lan", "Lan", "con gái", true},
+		{"con trai", "Lan", "con gái", false},
+		{"mẹ", "Nguyễn Thị B", "mẹ", true},
+		{"Nguyen", "Nguyễn Thị B", "mẹ", true},
+	}
+
+	for _, tt := range tests {
+		got := matchContact(tt.query, tt.displayName, tt.relationship)
+		if got != tt.want {
+			t.Errorf("matchContact(%q, %q, %q) = %v, want %v",
+				tt.query, tt.displayName, tt.relationship, got, tt.want)
+		}
+	}
+}
