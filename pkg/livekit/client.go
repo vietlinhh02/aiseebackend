@@ -61,3 +61,32 @@ func (c *Client) DeleteRoom(
 	}
 	return nil
 }
+
+func (c *Client) ListParticipants(
+	ctx context.Context, roomName string,
+) ([]*lkproto.ParticipantInfo, error) {
+	resp, err := c.RoomClient().ListParticipants(
+		ctx, &lkproto.ListParticipantsRequest{Room: roomName},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list participants %s: %w", roomName, err,
+		)
+	}
+	return resp.Participants, nil
+}
+
+func (c *Client) CreateRoomWithTimeout(
+	ctx context.Context, roomName string, emptyTimeoutSec uint32,
+) error {
+	_, err := c.RoomClient().CreateRoom(
+		ctx, &lkproto.CreateRoomRequest{
+			Name:         roomName,
+			EmptyTimeout: emptyTimeoutSec,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("create room %s: %w", roomName, err)
+	}
+	return nil
+}
