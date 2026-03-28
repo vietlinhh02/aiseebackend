@@ -1,4 +1,4 @@
-"""AiSee agent tool definitions — Phase 1 + Phase 2a."""
+"""AiSee agent tool definitions — Phase 1 + Phase 2a + Phase 2b."""
 
 import logging
 
@@ -227,6 +227,48 @@ async def set_appointment_reminder(
     )
 
 
+# --- Emergency tools (Phase 2b) ---
+
+
+@function_tool()
+async def emergency_alert() -> dict:
+    """SOS khan cap — gui thong bao den tat ca nguoi than kem vi tri GPS."""
+    try:
+        location = await _bridge.send_action(
+            _local_participant, "get_location", {},
+        )
+        lat = location.get("lat", 0)
+        lng = location.get("lng", 0)
+    except DataChannelTimeoutError:
+        logger.warning("get_location timed out, using unknown location")
+        lat, lng = 0, 0
+    return await _backend.tool_call_with_timeout(
+        "emergency_alert",
+        _user_id,
+        {"lat": lat, "lng": lng},
+        timeout=20.0,
+    )
+
+
+@function_tool()
+async def escalate_to_family(
+    contact_name: str = "",
+    skip: list[str] | None = None,
+) -> dict:
+    """Goi nguoi than ho tro khi AI khong giup duoc. Neu khong ai tra loi, goi lai voi skip de thu nguoi khac."""
+    params: dict = {}
+    if contact_name:
+        params["contact_name"] = contact_name
+    if skip:
+        params["skip"] = skip
+    return await _backend.tool_call_with_timeout(
+        "escalate_to_family",
+        _user_id,
+        params,
+        timeout=40.0,
+    )
+
+
 ALL_TOOLS = [
     # Phase 1 — Communication + Camera
     make_voice_call,
@@ -243,4 +285,7 @@ ALL_TOOLS = [
     log_health_symptom,
     log_health_metric,
     set_appointment_reminder,
+    # Phase 2b — Emergency
+    emergency_alert,
+    escalate_to_family,
 ]
