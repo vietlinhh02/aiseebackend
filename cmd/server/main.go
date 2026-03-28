@@ -10,8 +10,10 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/team-dang/aiseebackend/internal/auth"
+	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/user"
+	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -40,6 +42,14 @@ func main() {
 	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
 
+	lkClient := lk.NewClient(
+		os.Getenv("LIVEKIT_URL"),
+		os.Getenv("LIVEKIT_API_KEY"),
+		os.Getenv("LIVEKIT_API_SECRET"),
+	)
+	callService := call.NewService(lkClient)
+	callHandler := call.NewHandler(callService)
+
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
@@ -63,6 +73,7 @@ func main() {
 			r.Post("/users/family-link", userHandler.CreateFamilyLink)
 			r.Post("/users/join-family", userHandler.JoinFamily)
 			r.Get("/users/me/family", userHandler.GetFamily)
+			r.Post("/calls/token", callHandler.GetToken)
 		})
 	})
 
