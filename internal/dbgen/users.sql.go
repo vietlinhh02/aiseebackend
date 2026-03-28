@@ -11,6 +11,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkFamilyLink = `-- name: CheckFamilyLink :one
+SELECT EXISTS(
+    SELECT 1 FROM family_links
+    WHERE ((user_id = $1 AND family_id = $2) OR (user_id = $2 AND family_id = $1))
+      AND deleted_at IS NULL
+) AS linked
+`
+
+type CheckFamilyLinkParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	FamilyID pgtype.UUID `json:"family_id"`
+}
+
+func (q *Queries) CheckFamilyLink(ctx context.Context, arg CheckFamilyLinkParams) (bool, error) {
+	row := q.db.QueryRow(ctx, checkFamilyLink, arg.UserID, arg.FamilyID)
+	var linked bool
+	err := row.Scan(&linked)
+	return linked, err
+}
+
+const clearAPNSToken = `-- name: ClearAPNSToken :exec
+UPDATE users SET apns_token = NULL, updated_at = now() WHERE apns_token = $1
+`
+
+func (q *Queries) ClearAPNSToken(ctx context.Context, apnsToken pgtype.Text) error {
+	_, err := q.db.Exec(ctx, clearAPNSToken, apnsToken)
+	return err
+}
+
+const clearAPNSVoIPToken = `-- name: ClearAPNSVoIPToken :exec
+UPDATE users SET apns_voip_token = NULL, updated_at = now() WHERE apns_voip_token = $1
+`
+
+func (q *Queries) ClearAPNSVoIPToken(ctx context.Context, apnsVoipToken pgtype.Text) error {
+	_, err := q.db.Exec(ctx, clearAPNSVoIPToken, apnsVoipToken)
+	return err
+}
+
+const clearFCMToken = `-- name: ClearFCMToken :exec
+UPDATE users SET fcm_token = NULL, updated_at = now() WHERE fcm_token = $1
+`
+
+func (q *Queries) ClearFCMToken(ctx context.Context, fcmToken pgtype.Text) error {
+	_, err := q.db.Exec(ctx, clearFCMToken, fcmToken)
+	return err
+}
+
 const createFamilyLink = `-- name: CreateFamilyLink :one
 INSERT INTO family_links (user_id, family_id, relationship, is_primary_contact)
 VALUES ($1, $2, $3, $4)
@@ -132,6 +179,72 @@ func (q *Queries) GetFamilyMembers(ctx context.Context, userID pgtype.UUID) ([]U
 	return items, nil
 }
 
+const getFamilyMembersWithDetails = `-- name: GetFamilyMembersWithDetails :many
+SELECT u.id, u.google_id, u.email, u.display_name, u.role,
+       u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token,
+       u.apns_voip_token, u.settings, u.created_at, u.updated_at,
+       fl.relationship
+FROM users u
+JOIN family_links fl ON (
+    (fl.family_id = u.id AND fl.user_id = $1)
+    OR
+    (fl.user_id = u.id AND fl.family_id = $1)
+)
+WHERE fl.deleted_at IS NULL AND u.id != $1
+`
+
+type GetFamilyMembersWithDetailsRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	GoogleID      string             `json:"google_id"`
+	Email         string             `json:"email"`
+	DisplayName   string             `json:"display_name"`
+	Role          string             `json:"role"`
+	IsVolunteer   pgtype.Bool        `json:"is_volunteer"`
+	AvatarUrl     pgtype.Text        `json:"avatar_url"`
+	FcmToken      pgtype.Text        `json:"fcm_token"`
+	ApnsToken     pgtype.Text        `json:"apns_token"`
+	ApnsVoipToken pgtype.Text        `json:"apns_voip_token"`
+	Settings      []byte             `json:"settings"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	Relationship  string             `json:"relationship"`
+}
+
+func (q *Queries) GetFamilyMembersWithDetails(ctx context.Context, userID pgtype.UUID) ([]GetFamilyMembersWithDetailsRow, error) {
+	rows, err := q.db.Query(ctx, getFamilyMembersWithDetails, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetFamilyMembersWithDetailsRow{}
+	for rows.Next() {
+		var i GetFamilyMembersWithDetailsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GoogleID,
+			&i.Email,
+			&i.DisplayName,
+			&i.Role,
+			&i.IsVolunteer,
+			&i.AvatarUrl,
+			&i.FcmToken,
+			&i.ApnsToken,
+			&i.ApnsVoipToken,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Relationship,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserByGoogleID = `-- name: GetUserByGoogleID :one
 SELECT id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at FROM users WHERE google_id = $1
 `
@@ -225,6 +338,58 @@ type UpdateUserParams struct {
 
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUser, arg.ID, arg.DisplayName, arg.AvatarUrl)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.GoogleID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Role,
+		&i.IsVolunteer,
+		&i.AvatarUrl,
+		&i.FcmToken,
+		&i.ApnsToken,
+		&i.ApnsVoipToken,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+SET display_name = COALESCE(NULLIF($2, ''), display_name),
+    avatar_url = COALESCE($3, avatar_url),
+    fcm_token = COALESCE($4, fcm_token),
+    apns_token = COALESCE($5, apns_token),
+    apns_voip_token = COALESCE($6, apns_voip_token),
+    settings = COALESCE($7, settings),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at
+`
+
+type UpdateUserProfileParams struct {
+	ID            pgtype.UUID `json:"id"`
+	Column2       interface{} `json:"column_2"`
+	AvatarUrl     pgtype.Text `json:"avatar_url"`
+	FcmToken      pgtype.Text `json:"fcm_token"`
+	ApnsToken     pgtype.Text `json:"apns_token"`
+	ApnsVoipToken pgtype.Text `json:"apns_voip_token"`
+	Settings      []byte      `json:"settings"`
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.ID,
+		arg.Column2,
+		arg.AvatarUrl,
+		arg.FcmToken,
+		arg.ApnsToken,
+		arg.ApnsVoipToken,
+		arg.Settings,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,
