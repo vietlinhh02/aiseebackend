@@ -13,6 +13,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/internal/emergency"
 	"github.com/team-dang/aiseebackend/internal/health"
 	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/user"
@@ -33,6 +34,7 @@ type Handler struct {
 	medication  *medication.Service
 	health      *health.Service
 	appointment *appointment.Service
+	emergency   *emergency.Service
 	queries     *dbgen.Queries
 }
 
@@ -43,6 +45,7 @@ func NewHandler(
 	medSvc *medication.Service,
 	healthSvc *health.Service,
 	aptSvc *appointment.Service,
+	emergSvc *emergency.Service,
 	queries *dbgen.Queries,
 ) *Handler {
 	return &Handler{
@@ -52,6 +55,7 @@ func NewHandler(
 		medication:  medSvc,
 		health:      healthSvc,
 		appointment: aptSvc,
+		emergency:   emergSvc,
 		queries:     queries,
 	}
 }
@@ -113,6 +117,10 @@ func (h *Handler) dispatch(
 		return h.handleLogMetric(ctx, req)
 	case "set_appointment_reminder":
 		return h.handleSetAppointment(ctx, req)
+	case "emergency_alert":
+		return h.handleEmergencyAlert(ctx, req)
+	case "escalate_to_family":
+		return h.handleEscalateToFamily(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
@@ -493,6 +501,67 @@ func parseVNDatetime(s string) (time.Time, error) {
 		)
 	}
 	return t, nil
+}
+
+func (h *Handler) handleEmergencyAlert(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	lat, _ := req.Params["lat"].(float64)
+	lng, _ := req.Params["lng"].(float64)
+
+	result, err := h.emergency.Alert(ctx, req.UserID, lat, lng)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"status":          "alert_sent",
+		"room_name":       result.RoomName,
+		"token":           result.Token,
+		"family_notified": result.FamilyNotified,
+		"location": map[string]float64{
+			"lat": result.Lat,
+			"lng": result.Lng,
+		},
+	}, nil
+}
+
+func (h *Handler) handleEscalateToFamily(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	contactName, _ := req.Params["contact_name"].(string)
+
+	var skip []string
+	if rawSkip, ok := req.Params["skip"].([]any); ok {
+		for _, s := range rawSkip {
+			if name, ok := s.(string); ok {
+				skip = append(skip, name)
+			}
+		}
+	}
+
+	result, err := h.emergency.Escalate(
+		ctx, req.UserID, contactName, skip,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := map[string]any{
+		"status": result.Status,
+	}
+	switch result.Status {
+	case "answered":
+		resp["room_name"] = result.RoomName
+		resp["token"] = result.Token
+		resp["contact_name"] = result.ContactName
+	case "no_answer":
+		resp["tried"] = result.ContactName
+		resp["remaining"] = result.Remaining
+	case "no_contacts":
+		// status only
+	}
+	return resp, nil
 }
 
 func (h *Handler) logAudit(

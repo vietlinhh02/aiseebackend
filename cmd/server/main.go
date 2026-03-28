@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/auth"
+	"github.com/team-dang/aiseebackend/internal/emergency"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
@@ -114,9 +115,12 @@ func main() {
 	}()
 	defer scheduler.Stop()
 
+	emergService := emergency.NewService(queries, pusher, lkClient)
+
 	toolHandler := toolcall.NewHandler(
 		chatService, callService, userService,
 		medService, healthService, aptService,
+		emergService,
 		queries,
 	)
 
