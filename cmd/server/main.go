@@ -170,6 +170,7 @@ func main() {
 			r.Get("/users/me", userHandler.GetMe)
 			r.Put("/users/me", userHandler.UpdateMe)
 			r.Post("/users/family-link", userHandler.CreateFamilyLink)
+			r.Delete("/users/family-link/{link_id}", userHandler.DeleteFamilyLink)
 			r.Post("/users/join-family", userHandler.JoinFamily)
 			r.Get("/users/me/family", userHandler.GetFamily)
 

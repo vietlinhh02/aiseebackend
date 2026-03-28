@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -67,6 +68,15 @@ func (h *Handler) JoinFamily(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"status": "joined"})
+}
+
+func (h *Handler) DeleteFamilyLink(w http.ResponseWriter, r *http.Request) {
+	linkID := chi.URLParam(r, "link_id")
+	if err := h.service.DeleteFamilyLink(r.Context(), linkID); err != nil {
+		response.Err(w, http.StatusBadRequest, "delete_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 type UpdateMeRequest struct {

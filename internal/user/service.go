@@ -181,6 +181,16 @@ func (s *Service) ResolveContact(
 	}
 }
 
+func (s *Service) DeleteFamilyLink(
+	ctx context.Context, linkID string,
+) error {
+	lid, err := pgutil.ParsePgUUID(linkID)
+	if err != nil {
+		return fmt.Errorf("invalid link id: %w", err)
+	}
+	return s.queries.DeleteFamilyLink(ctx, lid)
+}
+
 func (s *Service) CheckFamilyLink(
 	ctx context.Context, userID, otherID string,
 ) (bool, error) {

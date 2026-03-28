@@ -1,4 +1,4 @@
-"""AiSee agent tool definitions — Phase 1 + Phase 2a-d."""
+"""AiSee agent tool definitions — Phase 1-3."""
 
 import logging
 
@@ -319,6 +319,56 @@ async def navigate_to(destination: str) -> dict:
         }
 
 
+# --- Volunteer & Location tools (Phase 3) ---
+
+
+@function_tool()
+async def escalate_to_volunteer() -> dict:
+    """Ket noi voi tinh nguyen vien khi gia dinh khong tra loi. Tra ve match_id de theo doi."""
+    return await _backend.tool_call(
+        "escalate_to_volunteer", _user_id, {},
+    )
+
+
+@function_tool()
+async def rate_volunteer(
+    volunteer_id: str,
+    match_id: str,
+    score: int,
+) -> dict:
+    """Danh gia tinh nguyen vien sau cuoc goi (1-5 sao)."""
+    return await _backend.tool_call(
+        "rate_volunteer",
+        _user_id,
+        {
+            "volunteer_id": volunteer_id,
+            "match_id": match_id,
+            "score": score,
+        },
+    )
+
+
+@function_tool()
+async def update_location() -> dict:
+    """Cap nhat vi tri hien tai cua nguoi dung."""
+    try:
+        location = await _bridge.send_action(
+            _local_participant, "get_location", {},
+        )
+        lat = location.get("lat", 0)
+        lng = location.get("lng", 0)
+    except DataChannelTimeoutError:
+        return {
+            "status": "error",
+            "error": "Khong lay duoc vi tri tu dien thoai.",
+        }
+    return await _backend.tool_call(
+        "update_location",
+        _user_id,
+        {"lat": lat, "lng": lng},
+    )
+
+
 ALL_TOOLS = [
     # Phase 1 — Communication + Camera
     make_voice_call,
@@ -343,4 +393,8 @@ ALL_TOOLS = [
     control_music,
     # Phase 2d — Navigation
     navigate_to,
+    # Phase 3 — Volunteer + Location
+    escalate_to_volunteer,
+    rate_volunteer,
+    update_location,
 ]
