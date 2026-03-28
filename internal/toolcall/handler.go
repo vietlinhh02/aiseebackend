@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/internal/health"
+	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/response"
@@ -23,23 +27,32 @@ type ToolCallRequest struct {
 }
 
 type Handler struct {
-	chat    *chat.Service
-	call    *call.Service
-	user    *user.Service
-	queries *dbgen.Queries
+	chat        *chat.Service
+	call        *call.Service
+	user        *user.Service
+	medication  *medication.Service
+	health      *health.Service
+	appointment *appointment.Service
+	queries     *dbgen.Queries
 }
 
 func NewHandler(
 	chatSvc *chat.Service,
 	callSvc *call.Service,
 	userSvc *user.Service,
+	medSvc *medication.Service,
+	healthSvc *health.Service,
+	aptSvc *appointment.Service,
 	queries *dbgen.Queries,
 ) *Handler {
 	return &Handler{
-		chat:    chatSvc,
-		call:    callSvc,
-		user:    userSvc,
-		queries: queries,
+		chat:        chatSvc,
+		call:        callSvc,
+		user:        userSvc,
+		medication:  medSvc,
+		health:      healthSvc,
+		appointment: aptSvc,
+		queries:     queries,
 	}
 }
 
@@ -86,6 +99,20 @@ func (h *Handler) dispatch(
 		return h.handleSendMessage(ctx, req)
 	case "read_unread_messages":
 		return h.handleReadUnread(ctx, req)
+	case "set_medication_reminder":
+		return h.handleSetMedication(ctx, req)
+	case "list_medication_reminders":
+		return h.handleListMedications(ctx, req)
+	case "mark_medication_taken":
+		return h.handleMarkMedicationTaken(ctx, req)
+	case "mark_medication_skipped":
+		return h.handleMarkMedicationSkipped(ctx, req)
+	case "log_health_symptom":
+		return h.handleLogSymptom(ctx, req)
+	case "log_health_metric":
+		return h.handleLogMetric(ctx, req)
+	case "set_appointment_reminder":
+		return h.handleSetAppointment(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
@@ -207,6 +234,265 @@ func (h *Handler) handleReadUnread(
 		"messages": results,
 		"count":    len(results),
 	}, nil
+}
+
+func (h *Handler) handleSetMedication(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	name, _ := req.Params["name"].(string)
+	dosage, _ := req.Params["dosage"].(string)
+	frequency, _ := req.Params["frequency"].(string)
+	if name == "" || dosage == "" {
+		return nil, fmt.Errorf("name and dosage are required")
+	}
+	if frequency == "" {
+		frequency = "daily"
+	}
+
+	rawTimes, _ := req.Params["times"].([]any)
+	times := make([]string, 0, len(rawTimes))
+	for _, t := range rawTimes {
+		if s, ok := t.(string); ok {
+			times = append(times, s)
+		}
+	}
+
+	med, err := h.medication.Create(
+		ctx, req.UserID, name, dosage, frequency, times,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create medication: %w", err)
+	}
+
+	return map[string]any{
+		"status": "created",
+		"medication": map[string]any{
+			"name":   med.Name,
+			"dosage": med.Dosage,
+			"times":  med.Times,
+		},
+		"schedule_action": map[string]any{
+			"action": "schedule_reminder",
+			"params": map[string]any{
+				"type":      "medication",
+				"name":      med.Name,
+				"times":     med.Times,
+				"frequency": med.Frequency,
+			},
+		},
+	}, nil
+}
+
+func (h *Handler) handleListMedications(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	meds, err := h.medication.ListWithStatus(
+		ctx, req.UserID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list medications: %w", err)
+	}
+
+	type medInfo struct {
+		Name       string   `json:"name"`
+		Dosage     string   `json:"dosage"`
+		Times      []string `json:"times"`
+		TakenToday bool     `json:"today_taken"`
+	}
+	results := make([]medInfo, 0, len(meds))
+	for _, m := range meds {
+		results = append(results, medInfo{
+			Name:       m.Medication.Name,
+			Dosage:     m.Medication.Dosage,
+			Times:      m.Medication.Times,
+			TakenToday: m.TakenToday,
+		})
+	}
+
+	return map[string]any{
+		"medications": results,
+		"count":       len(results),
+	}, nil
+}
+
+func (h *Handler) handleMarkMedicationTaken(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	name, _ := req.Params["name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	med, err := h.medication.FindByName(
+		ctx, req.UserID, name,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	medID := pgutil.PgUUIDToString(med.ID)
+	_, err = h.medication.MarkTaken(
+		ctx, req.UserID, medID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mark taken: %w", err)
+	}
+
+	return map[string]any{
+		"status": "taken",
+		"name":   med.Name,
+	}, nil
+}
+
+func (h *Handler) handleMarkMedicationSkipped(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	name, _ := req.Params["name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	med, err := h.medication.FindByName(
+		ctx, req.UserID, name,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	medID := pgutil.PgUUIDToString(med.ID)
+	_, err = h.medication.MarkSkipped(
+		ctx, req.UserID, medID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mark skipped: %w", err)
+	}
+
+	return map[string]any{
+		"status": "skipped",
+		"name":   med.Name,
+	}, nil
+}
+
+func (h *Handler) handleLogSymptom(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	symptom, _ := req.Params["symptom"].(string)
+	severity, _ := req.Params["severity"].(string)
+	notes, _ := req.Params["notes"].(string)
+	if symptom == "" {
+		return nil, fmt.Errorf("symptom is required")
+	}
+
+	entry, err := h.health.LogSymptom(
+		ctx, req.UserID, symptom, severity, notes,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("log symptom: %w", err)
+	}
+
+	return map[string]any{
+		"status":  "logged",
+		"symptom": entry.Symptom,
+		"id":      pgutil.PgUUIDToString(entry.ID),
+	}, nil
+}
+
+func (h *Handler) handleLogMetric(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	metricType, _ := req.Params["metric_type"].(string)
+	value, _ := req.Params["value"].(string)
+	unit, _ := req.Params["unit"].(string)
+	if metricType == "" || value == "" {
+		return nil, fmt.Errorf(
+			"metric_type and value are required",
+		)
+	}
+
+	entry, err := h.health.LogMetric(
+		ctx, req.UserID, metricType, value, unit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("log metric: %w", err)
+	}
+
+	return map[string]any{
+		"status":      "logged",
+		"metric_type": entry.MetricType,
+		"value":       entry.Value,
+		"id":          pgutil.PgUUIDToString(entry.ID),
+	}, nil
+}
+
+var hcmTZ = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	if err != nil {
+		panic("load timezone Asia/Ho_Chi_Minh: " + err.Error())
+	}
+	return loc
+}()
+
+func (h *Handler) handleSetAppointment(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	title, _ := req.Params["title"].(string)
+	datetimeStr, _ := req.Params["datetime"].(string)
+	location, _ := req.Params["location"].(string)
+	notes, _ := req.Params["notes"].(string)
+	if title == "" || datetimeStr == "" {
+		return nil, fmt.Errorf(
+			"title and datetime are required",
+		)
+	}
+
+	dt, err := parseVNDatetime(datetimeStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse datetime: %w", err)
+	}
+
+	apt, err := h.appointment.Create(
+		ctx, req.UserID, title, location, dt, notes,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create appointment: %w", err)
+	}
+
+	formatted := apt.Datetime.Time.In(hcmTZ).Format(
+		"2006-01-02 15:04",
+	)
+
+	return map[string]any{
+		"status": "created",
+		"appointment": map[string]any{
+			"title":    apt.Title,
+			"datetime": formatted,
+			"location": location,
+		},
+		"schedule_action": map[string]any{
+			"action": "schedule_reminder",
+			"params": map[string]any{
+				"type":     "appointment",
+				"title":    apt.Title,
+				"datetime": datetimeStr,
+			},
+		},
+	}, nil
+}
+
+func parseVNDatetime(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	t, err := time.ParseInLocation(
+		"2006-01-02 15:04", s, hcmTZ,
+	)
+	if err != nil {
+		return time.Time{}, fmt.Errorf(
+			"expected YYYY-MM-DD HH:MM or RFC3339, got %q",
+			s,
+		)
+	}
+	return t, nil
 }
 
 func (h *Handler) logAudit(
