@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
@@ -128,6 +129,15 @@ func (s *Service) Alert(
 	}
 
 	s.lastAlert.Store(userID, time.Now())
+
+	// Update last known location
+	s.queries.UpdateUserLocation(
+		ctx, dbgen.UpdateUserLocationParams{
+			ID:      uid,
+			LastLat: pgtype.Float8{Float64: lat, Valid: true},
+			LastLng: pgtype.Float8{Float64: lng, Valid: true},
+		},
+	)
 
 	return AlertResult{
 		RoomName:       roomName,
