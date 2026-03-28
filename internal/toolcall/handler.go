@@ -16,6 +16,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/emergency"
 	"github.com/team-dang/aiseebackend/internal/health"
 	"github.com/team-dang/aiseebackend/internal/medication"
+	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/response"
@@ -35,6 +36,7 @@ type Handler struct {
 	health      *health.Service
 	appointment *appointment.Service
 	emergency   *emergency.Service
+	music       *music.Service
 	queries     *dbgen.Queries
 }
 
@@ -46,6 +48,7 @@ func NewHandler(
 	healthSvc *health.Service,
 	aptSvc *appointment.Service,
 	emergSvc *emergency.Service,
+	musicSvc *music.Service,
 	queries *dbgen.Queries,
 ) *Handler {
 	return &Handler{
@@ -56,6 +59,7 @@ func NewHandler(
 		health:      healthSvc,
 		appointment: aptSvc,
 		emergency:   emergSvc,
+		music:       musicSvc,
 		queries:     queries,
 	}
 }
@@ -121,6 +125,8 @@ func (h *Handler) dispatch(
 		return h.handleEmergencyAlert(ctx, req)
 	case "escalate_to_family":
 		return h.handleEscalateToFamily(ctx, req)
+	case "play_music":
+		return h.handlePlayMusic(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
@@ -562,6 +568,32 @@ func (h *Handler) handleEscalateToFamily(
 		// status only
 	}
 	return resp, nil
+}
+
+func (h *Handler) handlePlayMusic(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	query, _ := req.Params["query"].(string)
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+
+	result, err := h.music.Search(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"status": "found",
+		"title":  result.Title,
+		"play_action": map[string]any{
+			"action": "play_audio",
+			"params": map[string]string{
+				"url":   result.URL,
+				"title": result.Title,
+			},
+		},
+	}, nil
 }
 
 func (h *Handler) logAudit(
