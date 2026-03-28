@@ -88,25 +88,38 @@ type Message struct {
 }
 
 type User struct {
-	ID            pgtype.UUID        `json:"id"`
-	GoogleID      string             `json:"google_id"`
-	Email         string             `json:"email"`
-	DisplayName   string             `json:"display_name"`
-	Role          string             `json:"role"`
-	IsVolunteer   pgtype.Bool        `json:"is_volunteer"`
-	AvatarUrl     pgtype.Text        `json:"avatar_url"`
-	FcmToken      pgtype.Text        `json:"fcm_token"`
-	ApnsToken     pgtype.Text        `json:"apns_token"`
-	ApnsVoipToken pgtype.Text        `json:"apns_voip_token"`
-	Settings      []byte             `json:"settings"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	GoogleID       string             `json:"google_id"`
+	Email          string             `json:"email"`
+	DisplayName    string             `json:"display_name"`
+	Role           string             `json:"role"`
+	IsVolunteer    pgtype.Bool        `json:"is_volunteer"`
+	AvatarUrl      pgtype.Text        `json:"avatar_url"`
+	FcmToken       pgtype.Text        `json:"fcm_token"`
+	ApnsToken      pgtype.Text        `json:"apns_token"`
+	ApnsVoipToken  pgtype.Text        `json:"apns_voip_token"`
+	Settings       []byte             `json:"settings"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	LastLat        pgtype.Float8      `json:"last_lat"`
+	LastLng        pgtype.Float8      `json:"last_lng"`
+	LastLocationAt pgtype.Timestamptz `json:"last_location_at"`
 }
 
 type Volunteer struct {
-	UserID     pgtype.UUID   `json:"user_id"`
-	Available  pgtype.Bool   `json:"available"`
-	Languages  []string      `json:"languages"`
-	Rating     pgtype.Float4 `json:"rating"`
-	TotalCalls pgtype.Int4   `json:"total_calls"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Available  bool               `json:"available"`
+	Languages  []string           `json:"languages"`
+	Rating     float32            `json:"rating"`
+	TotalCalls int32              `json:"total_calls"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type VolunteerRating struct {
+	ID          pgtype.UUID        `json:"id"`
+	VolunteerID pgtype.UUID        `json:"volunteer_id"`
+	RaterID     pgtype.UUID        `json:"rater_id"`
+	MatchID     string             `json:"match_id"`
+	Score       int16              `json:"score"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }

@@ -94,7 +94,7 @@ func (q *Queries) CreateFamilyLink(ctx context.Context, arg CreateFamilyLinkPara
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (google_id, email, display_name, role)
 VALUES ($1, $2, $3, $4)
-RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at
+RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at, last_lat, last_lng, last_location_at
 `
 
 type CreateUserParams struct {
@@ -126,6 +126,9 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastLat,
+		&i.LastLng,
+		&i.LastLocationAt,
 	)
 	return i, err
 }
@@ -140,7 +143,7 @@ func (q *Queries) DeleteFamilyLink(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getFamilyMembers = `-- name: GetFamilyMembers :many
-SELECT u.id, u.google_id, u.email, u.display_name, u.role, u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token, u.apns_voip_token, u.settings, u.created_at, u.updated_at FROM users u
+SELECT u.id, u.google_id, u.email, u.display_name, u.role, u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token, u.apns_voip_token, u.settings, u.created_at, u.updated_at, u.last_lat, u.last_lng, u.last_location_at FROM users u
 JOIN family_links fl ON fl.family_id = u.id
 WHERE fl.user_id = $1 AND fl.deleted_at IS NULL
 `
@@ -168,6 +171,9 @@ func (q *Queries) GetFamilyMembers(ctx context.Context, userID pgtype.UUID) ([]U
 			&i.Settings,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LastLat,
+			&i.LastLng,
+			&i.LastLocationAt,
 		); err != nil {
 			return nil, err
 		}
@@ -315,7 +321,7 @@ func (q *Queries) GetFamilyMembersWithDetails(ctx context.Context, userID pgtype
 }
 
 const getUserByGoogleID = `-- name: GetUserByGoogleID :one
-SELECT id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at FROM users WHERE google_id = $1
+SELECT id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at, last_lat, last_lng, last_location_at FROM users WHERE google_id = $1
 `
 
 func (q *Queries) GetUserByGoogleID(ctx context.Context, googleID string) (User, error) {
@@ -335,12 +341,15 @@ func (q *Queries) GetUserByGoogleID(ctx context.Context, googleID string) (User,
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastLat,
+		&i.LastLng,
+		&i.LastLocationAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at FROM users WHERE id = $1
+SELECT id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at, last_lat, last_lng, last_location_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -360,6 +369,9 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastLat,
+		&i.LastLng,
+		&i.LastLocationAt,
 	)
 	return i, err
 }
@@ -396,7 +408,7 @@ const updateUser = `-- name: UpdateUser :one
 UPDATE users
 SET display_name = $2, avatar_url = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at
+RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at, last_lat, last_lng, last_location_at
 `
 
 type UpdateUserParams struct {
@@ -422,6 +434,9 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastLat,
+		&i.LastLng,
+		&i.LastLocationAt,
 	)
 	return i, err
 }
@@ -436,7 +451,7 @@ SET display_name = COALESCE(NULLIF($2, ''), display_name),
     settings = COALESCE($7, settings),
     updated_at = now()
 WHERE id = $1
-RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at
+RETURNING id, google_id, email, display_name, role, is_volunteer, avatar_url, fcm_token, apns_token, apns_voip_token, settings, created_at, updated_at, last_lat, last_lng, last_location_at
 `
 
 type UpdateUserProfileParams struct {
@@ -474,6 +489,9 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastLat,
+		&i.LastLng,
+		&i.LastLocationAt,
 	)
 	return i, err
 }
