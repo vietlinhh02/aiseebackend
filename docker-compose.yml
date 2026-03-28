@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aisee
+      POSTGRES_PASSWORD: aisee
+      POSTGRES_DB: aisee
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50060:50000-50060/udp"
+    environment:
+      LIVEKIT_KEYS: "devkey: devsecret"
+
+volumes:
+  pgdata:
