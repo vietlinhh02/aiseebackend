@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/team-dang/aiseebackend/internal/auth"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -36,6 +37,9 @@ func main() {
 	authService := auth.NewService(pool, jwtSecret)
 	authHandler := auth.NewHandler(authService)
 
+	userService := user.NewService(pool)
+	userHandler := user.NewHandler(userService)
+
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
@@ -52,6 +56,14 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/google", authHandler.GoogleAuth)
 		r.Post("/auth/refresh", authHandler.Refresh)
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(jwtSecret))
+			r.Get("/users/me", userHandler.GetMe)
+			r.Post("/users/family-link", userHandler.CreateFamilyLink)
+			r.Post("/users/join-family", userHandler.JoinFamily)
+			r.Get("/users/me/family", userHandler.GetFamily)
+		})
 	})
 
 	r.Route("/api/internal", func(r chi.Router) {
