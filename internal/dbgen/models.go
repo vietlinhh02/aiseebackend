@@ -9,15 +9,16 @@ import (
 )
 
 type Appointment struct {
-	ID        pgtype.UUID        `json:"id"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	Title     string             `json:"title"`
-	Location  pgtype.Text        `json:"location"`
-	Datetime  pgtype.Timestamptz `json:"datetime"`
-	Notes     pgtype.Text        `json:"notes"`
-	Reminded  pgtype.Bool        `json:"reminded"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Title       string             `json:"title"`
+	Location    pgtype.Text        `json:"location"`
+	Datetime    pgtype.Timestamptz `json:"datetime"`
+	Notes       pgtype.Text        `json:"notes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	Reminded1h  pgtype.Bool        `json:"reminded_1h"`
+	Reminded15m pgtype.Bool        `json:"reminded_15m"`
 }
 
 type AuditLog struct {
