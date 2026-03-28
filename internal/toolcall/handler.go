@@ -247,11 +247,11 @@ func (h *Handler) handleReadUnread(
 func (h *Handler) handleSetMedication(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
-	name, _ := req.Params["name"].(string)
+	name, _ := req.Params["medicine_name"].(string)
 	dosage, _ := req.Params["dosage"].(string)
 	frequency, _ := req.Params["frequency"].(string)
 	if name == "" || dosage == "" {
-		return nil, fmt.Errorf("name and dosage are required")
+		return nil, fmt.Errorf("medicine_name and dosage are required")
 	}
 	if frequency == "" {
 		frequency = "daily"
@@ -326,9 +326,9 @@ func (h *Handler) handleListMedications(
 func (h *Handler) handleMarkMedicationTaken(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
-	name, _ := req.Params["name"].(string)
+	name, _ := req.Params["medicine_name"].(string)
 	if name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, fmt.Errorf("medicine_name is required")
 	}
 
 	med, err := h.medication.FindByName(
@@ -355,9 +355,9 @@ func (h *Handler) handleMarkMedicationTaken(
 func (h *Handler) handleMarkMedicationSkipped(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
-	name, _ := req.Params["name"].(string)
+	name, _ := req.Params["medicine_name"].(string)
 	if name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, fmt.Errorf("medicine_name is required")
 	}
 
 	med, err := h.medication.FindByName(
