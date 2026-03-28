@@ -27,5 +27,22 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def tool_call_with_timeout(
+        self,
+        tool: str,
+        user_id: str,
+        params: dict,
+        timeout: float = 35.0,
+    ) -> dict:
+        """Send a tool call with custom timeout (for long-running tools)."""
+        resp = await self.client.post(
+            "/tool-call",
+            json={"tool": tool, "user_id": user_id, "params": params},
+            headers={"X-Internal-Key": self.api_key},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def close(self):
         await self.client.aclose()
