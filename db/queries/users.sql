@@ -74,3 +74,17 @@ SELECT EXISTS(
     WHERE ((user_id = $1 AND family_id = $2) OR (user_id = $2 AND family_id = $1))
       AND deleted_at IS NULL
 ) AS linked;
+
+-- name: GetFamilyMembersOrdered :many
+SELECT u.id, u.google_id, u.email, u.display_name, u.role,
+       u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token,
+       u.apns_voip_token, u.settings, u.created_at, u.updated_at,
+       fl.relationship, fl.is_primary_contact
+FROM users u
+JOIN family_links fl ON (
+    (fl.family_id = u.id AND fl.user_id = $1)
+    OR
+    (fl.user_id = u.id AND fl.family_id = $1)
+)
+WHERE fl.deleted_at IS NULL AND u.id != $1
+ORDER BY fl.is_primary_contact DESC, fl.created_at ASC;

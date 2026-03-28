@@ -179,6 +179,75 @@ func (q *Queries) GetFamilyMembers(ctx context.Context, userID pgtype.UUID) ([]U
 	return items, nil
 }
 
+const getFamilyMembersOrdered = `-- name: GetFamilyMembersOrdered :many
+SELECT u.id, u.google_id, u.email, u.display_name, u.role,
+       u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token,
+       u.apns_voip_token, u.settings, u.created_at, u.updated_at,
+       fl.relationship, fl.is_primary_contact
+FROM users u
+JOIN family_links fl ON (
+    (fl.family_id = u.id AND fl.user_id = $1)
+    OR
+    (fl.user_id = u.id AND fl.family_id = $1)
+)
+WHERE fl.deleted_at IS NULL AND u.id != $1
+ORDER BY fl.is_primary_contact DESC, fl.created_at ASC
+`
+
+type GetFamilyMembersOrderedRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	GoogleID         string             `json:"google_id"`
+	Email            string             `json:"email"`
+	DisplayName      string             `json:"display_name"`
+	Role             string             `json:"role"`
+	IsVolunteer      pgtype.Bool        `json:"is_volunteer"`
+	AvatarUrl        pgtype.Text        `json:"avatar_url"`
+	FcmToken         pgtype.Text        `json:"fcm_token"`
+	ApnsToken        pgtype.Text        `json:"apns_token"`
+	ApnsVoipToken    pgtype.Text        `json:"apns_voip_token"`
+	Settings         []byte             `json:"settings"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Relationship     string             `json:"relationship"`
+	IsPrimaryContact bool               `json:"is_primary_contact"`
+}
+
+func (q *Queries) GetFamilyMembersOrdered(ctx context.Context, userID pgtype.UUID) ([]GetFamilyMembersOrderedRow, error) {
+	rows, err := q.db.Query(ctx, getFamilyMembersOrdered, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetFamilyMembersOrderedRow{}
+	for rows.Next() {
+		var i GetFamilyMembersOrderedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GoogleID,
+			&i.Email,
+			&i.DisplayName,
+			&i.Role,
+			&i.IsVolunteer,
+			&i.AvatarUrl,
+			&i.FcmToken,
+			&i.ApnsToken,
+			&i.ApnsVoipToken,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Relationship,
+			&i.IsPrimaryContact,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getFamilyMembersWithDetails = `-- name: GetFamilyMembersWithDetails :many
 SELECT u.id, u.google_id, u.email, u.display_name, u.role,
        u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token,
