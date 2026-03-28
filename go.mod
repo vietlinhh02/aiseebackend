@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/livekit/protocol v1.45.1
 	github.com/livekit/server-sdk-go/v2 v2.16.1
+	github.com/redis/go-redis/v9 v9.17.2
 	github.com/sideshow/apns2 v0.25.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.35.0
@@ -68,7 +69,6 @@ require (
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/pion/webrtc/v4 v4.2.6 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
-	github.com/redis/go-redis/v9 v9.17.2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
