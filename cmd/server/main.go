@@ -5,19 +5,25 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/auth"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/internal/health"
+	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
 	"github.com/team-dang/aiseebackend/internal/user"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/push"
+	"github.com/team-dang/aiseebackend/pkg/reminder"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -36,6 +42,24 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	// Redis
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+	redisOpts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		slog.Error("invalid REDIS_URL", "error", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(redisOpts)
+	defer rdb.Close()
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		slog.Warn("redis not available, reminders disabled",
+			"error", err,
+		)
+	}
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	internalKey := os.Getenv("INTERNAL_API_KEY")
@@ -66,8 +90,34 @@ func main() {
 		chatService, chatHub, userService, jwtSecret,
 	)
 
+	// Reminder scheduler
+	scheduler := reminder.New(rdb, 30*time.Second)
+
+	// Health services
+	healthService := health.NewService(queries)
+	medService := medication.NewService(
+		queries, scheduler, pusher,
+	)
+	aptService := appointment.NewService(
+		queries, scheduler, pusher,
+	)
+
+	// Register reminder handlers
+	scheduler.Register("medications", medService)
+	scheduler.Register("appointments", aptService)
+
+	// Start scheduler in background
+	go func() {
+		if err := scheduler.Start(context.Background()); err != nil {
+			slog.Error("scheduler failed", "error", err)
+		}
+	}()
+	defer scheduler.Stop()
+
 	toolHandler := toolcall.NewHandler(
-		chatService, callService, userService, queries,
+		chatService, callService, userService,
+		medService, healthService, aptService,
+		queries,
 	)
 
 	// Router
