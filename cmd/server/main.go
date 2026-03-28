@@ -13,16 +13,18 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/auth"
-	"github.com/team-dang/aiseebackend/internal/emergency"
-	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
+	"github.com/team-dang/aiseebackend/internal/dashboard"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/internal/emergency"
 	"github.com/team-dang/aiseebackend/internal/health"
 	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
 	"github.com/team-dang/aiseebackend/internal/user"
+	"github.com/team-dang/aiseebackend/internal/volunteer"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/push"
 	"github.com/team-dang/aiseebackend/pkg/reminder"
@@ -119,10 +121,21 @@ func main() {
 	emergService := emergency.NewService(queries, pusher, lkClient)
 	musicService := music.NewService()
 
+	// Dashboard
+	dashService := dashboard.NewService(queries)
+	dashHandler := dashboard.NewHandler(dashService, userService)
+
+	// Volunteer
+	volService := volunteer.NewService(
+		queries, rdb, lkClient, pusher,
+	)
+	volHandler := volunteer.NewHandler(volService)
+
 	toolHandler := toolcall.NewHandler(
 		chatService, callService, userService,
 		medService, healthService, aptService,
 		emergService, musicService,
+		volService,
 		queries,
 	)
 
@@ -170,6 +183,26 @@ func main() {
 			r.Post("/messages/send", chatHandler.SendMessage)
 			r.Get("/messages/{contactID}", chatHandler.GetMessages)
 			r.Put("/messages/{id}/read", chatHandler.MarkRead)
+
+			// Dashboard (family)
+			r.Route("/dashboard/{user_id}", func(r chi.Router) {
+				r.Get("/health", dashHandler.Health)
+				r.Get("/medications", dashHandler.Medications)
+				r.Get("/audit-log", dashHandler.AuditLog)
+				r.Get("/location", dashHandler.Location)
+				r.Post("/medications", dashHandler.CreateMedication)
+				r.Put("/medications/{med_id}", dashHandler.UpdateMedication)
+				r.Delete("/medications/{med_id}", dashHandler.DeleteMedication)
+			})
+
+			// Volunteers
+			r.Route("/volunteers", func(r chi.Router) {
+				r.Post("/register", volHandler.Register)
+				r.Put("/availability", volHandler.SetAvailability)
+				r.Post("/match", volHandler.StartMatch)
+				r.Get("/match/{match_id}/status", volHandler.MatchStatus)
+				r.Post("/rate", volHandler.Rate)
+			})
 		})
 
 		// WebSocket (auth via query param, not middleware)
