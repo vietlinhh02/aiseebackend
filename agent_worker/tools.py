@@ -1,4 +1,4 @@
-"""AiSee agent tool definitions — Phase 1 + Phase 2a + Phase 2b."""
+"""AiSee agent tool definitions — Phase 1 + Phase 2a + Phase 2b + Phase 2c."""
 
 import logging
 
@@ -107,22 +107,23 @@ async def deactivate_camera() -> dict:
         }
 
 
-# --- Helper for tools that include schedule_action ---
+# --- Helper for tools that include *_action fields ---
 
 
 async def _call_and_forward(tool_name: str, params: dict) -> dict:
-    """Call backend and forward schedule_action to app (best-effort)."""
+    """Call backend and forward any *_action fields to app via data channel."""
     result = await _backend.tool_call(tool_name, _user_id, params)
-    if "schedule_action" in result:
-        action = result.pop("schedule_action")
-        try:
-            await _bridge.send_action(
-                _local_participant,
-                action["action"],
-                action["params"],
-            )
-        except (DataChannelTimeoutError, Exception) as exc:
-            logger.debug("schedule_action forwarding failed: %s", exc)
+    for key in list(result.keys()):
+        if key.endswith("_action") and isinstance(result[key], dict):
+            action = result.pop(key)
+            try:
+                await _bridge.send_action(
+                    _local_participant,
+                    action["action"],
+                    action["params"],
+                )
+            except (DataChannelTimeoutError, Exception) as exc:
+                logger.debug("%s forwarding failed: %s", key, exc)
     return result
 
 
@@ -269,6 +270,35 @@ async def escalate_to_family(
     )
 
 
+# --- Music tools (Phase 2c) ---
+
+
+@function_tool()
+async def play_music(query: str) -> dict:
+    """Tim va phat nhac theo yeu cau (VD: 'nhac Trinh Cong Son', 'bai hat Diem Xua')."""
+    return await _call_and_forward(
+        "play_music",
+        {"query": query},
+    )
+
+
+@function_tool()
+async def control_music(action: str) -> dict:
+    """Dieu khien nhac dang phat: pause, resume, stop."""
+    try:
+        result = await _bridge.send_action(
+            _local_participant,
+            "control_audio",
+            {"command": action},
+        )
+        return {"status": result.get("status", "ok")}
+    except DataChannelTimeoutError:
+        return {
+            "status": "error",
+            "error": "App did not respond.",
+        }
+
+
 ALL_TOOLS = [
     # Phase 1 — Communication + Camera
     make_voice_call,
@@ -288,4 +318,7 @@ ALL_TOOLS = [
     # Phase 2b — Emergency
     emergency_alert,
     escalate_to_family,
+    # Phase 2c — Music
+    play_music,
+    control_music,
 ]
