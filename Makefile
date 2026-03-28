@@ -30,15 +30,17 @@ db-down: ## Stop Docker services
 
 # === Database ===
 
+MIGRATE := $(shell command -v migrate 2>/dev/null || echo "$(shell go env GOPATH)/bin/migrate")
+
 migrate: ## Run database migrations
-	@command -v migrate > /dev/null 2>&1 || { echo "Install: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest"; exit 1; }
-	migrate -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" up
+	@test -f $(MIGRATE) || go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" up
 
 migrate-down: ## Rollback all migrations
-	migrate -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" down -all
+	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" down -all
 
 migrate-create: ## Create new migration (usage: make migrate-create name=add_something)
-	migrate create -ext sql -dir db/migrations -seq $(name)
+	$(MIGRATE) create -ext sql -dir db/migrations -seq $(name)
 
 # === Code Generation ===
 
