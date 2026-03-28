@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/team-dang/aiseebackend/internal/auth"
+	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -28,6 +30,12 @@ func main() {
 	}
 	defer pool.Close()
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	internalKey := os.Getenv("INTERNAL_API_KEY")
+
+	authService := auth.NewService(pool, jwtSecret)
+	authHandler := auth.NewHandler(authService)
+
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
@@ -39,6 +47,16 @@ func main() {
 			return
 		}
 		response.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Post("/auth/google", authHandler.GoogleAuth)
+		r.Post("/auth/refresh", authHandler.Refresh)
+	})
+
+	r.Route("/api/internal", func(r chi.Router) {
+		r.Use(middleware.InternalAuth(internalKey))
+		// Internal endpoints added in later tasks
 	})
 
 	port := os.Getenv("PORT")
