@@ -76,12 +76,13 @@ type MedStatus struct {
 
 type MedicationsResponse struct {
 	Medications []MedStatus `json:"medications"`
+	Count       int         `json:"count"`
 }
 
 type LocationResponse struct {
-	LastLat        pgtype.Float8      `json:"last_lat"`
-	LastLng        pgtype.Float8      `json:"last_lng"`
-	LastLocationAt pgtype.Timestamptz `json:"last_location_at"`
+	Lat       pgtype.Float8      `json:"lat"`
+	Lng       pgtype.Float8      `json:"lng"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CreateMedRequest struct {
@@ -207,7 +208,7 @@ func (s *Service) Medications(
 		})
 	}
 
-	return MedicationsResponse{Medications: result}, nil
+	return MedicationsResponse{Medications: result, Count: len(result)}, nil
 }
 
 // AuditLog returns paginated audit logs for a user.
@@ -247,9 +248,9 @@ func (s *Service) Location(
 	}
 
 	return LocationResponse{
-		LastLat:        row.LastLat,
-		LastLng:        row.LastLng,
-		LastLocationAt: row.LastLocationAt,
+		Lat:       row.LastLat,
+		Lng:       row.LastLng,
+		UpdatedAt: row.LastLocationAt,
 	}, nil
 }
 
