@@ -9,6 +9,8 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/livekit/protocol v1.45.1
 	github.com/livekit/server-sdk-go/v2 v2.16.1
+	github.com/sideshow/apns2 v0.25.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
@@ -16,6 +18,7 @@ require (
 	buf.build/go/protovalidate v1.1.2 // indirect
 	buf.build/go/protoyaml v0.6.0 // indirect
 	cel.dev/expr v0.25.1 // indirect
+	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
@@ -28,6 +31,7 @@ require (
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/golang-jwt/jwt/v4 v4.4.1 // indirect
 	github.com/google/cel-go v0.27.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
