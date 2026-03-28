@@ -69,6 +69,7 @@ async def entrypoint(ctx):
     session = AgentSession(
         llm=google.realtime.RealtimeModel(
             model=GEMINI_MODEL,
+            search_tool=google.realtime.GoogleSearch(),
         ),
     )
 

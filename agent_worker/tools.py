@@ -1,4 +1,4 @@
-"""AiSee agent tool definitions — Phase 1 + Phase 2a + Phase 2b + Phase 2c."""
+"""AiSee agent tool definitions — Phase 1 + Phase 2a-d."""
 
 import logging
 
@@ -299,6 +299,26 @@ async def control_music(action: str) -> dict:
         }
 
 
+# --- Navigation tools (Phase 2d) ---
+
+
+@function_tool()
+async def navigate_to(destination: str) -> dict:
+    """Mo ban do va chi duong den dia diem (VD: 'benh vien Mat trung uong', 'nha thuoc gan nhat')."""
+    try:
+        result = await _bridge.send_action(
+            _local_participant,
+            "open_maps",
+            {"destination": destination},
+        )
+        return {"status": result.get("status", "ok")}
+    except DataChannelTimeoutError:
+        return {
+            "status": "error",
+            "error": "App did not respond.",
+        }
+
+
 ALL_TOOLS = [
     # Phase 1 — Communication + Camera
     make_voice_call,
@@ -321,4 +341,6 @@ ALL_TOOLS = [
     # Phase 2c — Music
     play_music,
     control_music,
+    # Phase 2d — Navigation
+    navigate_to,
 ]
