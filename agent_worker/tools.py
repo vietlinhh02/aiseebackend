@@ -1,4 +1,4 @@
-"""AiSee agent tool definitions — Phase 1."""
+"""AiSee agent tool definitions — Phase 1 + Phase 2a."""
 
 import logging
 
@@ -107,11 +107,140 @@ async def deactivate_camera() -> dict:
         }
 
 
+# --- Helper for tools that include schedule_action ---
+
+
+async def _call_and_forward(tool_name: str, params: dict) -> dict:
+    """Call backend and forward schedule_action to app (best-effort)."""
+    result = await _backend.tool_call(tool_name, _user_id, params)
+    if "schedule_action" in result:
+        action = result.pop("schedule_action")
+        try:
+            await _bridge.send_action(
+                _local_participant,
+                action["action"],
+                action["params"],
+            )
+        except (DataChannelTimeoutError, Exception) as exc:
+            logger.debug("schedule_action forwarding failed: %s", exc)
+    return result
+
+
+# --- Health tools (Phase 2a) ---
+
+
+@function_tool()
+async def set_medication_reminder(
+    medicine_name: str,
+    dosage: str,
+    times: list[str],
+    frequency: str = "daily",
+) -> dict:
+    """Dat nhac nho uong thuoc. times la danh sach gio (VD: ["07:00", "21:00"])."""
+    return await _call_and_forward(
+        "set_medication_reminder",
+        {
+            "medicine_name": medicine_name,
+            "dosage": dosage,
+            "times": times,
+            "frequency": frequency,
+        },
+    )
+
+
+@function_tool()
+async def list_medication_reminders() -> dict:
+    """Liet ke thuoc hom nay va trang thai da uong chua."""
+    return await _backend.tool_call(
+        "list_medication_reminders", _user_id, {},
+    )
+
+
+@function_tool()
+async def mark_medication_taken(medicine_name: str) -> dict:
+    """Xac nhan da uong thuoc."""
+    return await _backend.tool_call(
+        "mark_medication_taken",
+        _user_id,
+        {"medicine_name": medicine_name},
+    )
+
+
+@function_tool()
+async def mark_medication_skipped(medicine_name: str) -> dict:
+    """Xac nhan bo qua khong uong thuoc hom nay."""
+    return await _backend.tool_call(
+        "mark_medication_skipped",
+        _user_id,
+        {"medicine_name": medicine_name},
+    )
+
+
+@function_tool()
+async def log_health_symptom(
+    symptom: str,
+    severity: str = "",
+    notes: str = "",
+) -> dict:
+    """Ghi nhan trieu chung suc khoe (VD: dau dau, chong mat, met moi)."""
+    params = {"symptom": symptom}
+    if severity:
+        params["severity"] = severity
+    if notes:
+        params["notes"] = notes
+    return await _backend.tool_call(
+        "log_health_symptom", _user_id, params,
+    )
+
+
+@function_tool()
+async def log_health_metric(
+    metric_type: str,
+    value: str,
+    unit: str = "",
+) -> dict:
+    """Ghi nhan chi so suc khoe (VD: huyet ap 140/90, nhiet do 37.5)."""
+    params = {"metric_type": metric_type, "value": value}
+    if unit:
+        params["unit"] = unit
+    return await _backend.tool_call(
+        "log_health_metric", _user_id, params,
+    )
+
+
+@function_tool()
+async def set_appointment_reminder(
+    title: str,
+    datetime: str,
+    location: str = "",
+    notes: str = "",
+) -> dict:
+    """Dat nhac nho lich hen bac si. datetime dang YYYY-MM-DD HH:MM."""
+    return await _call_and_forward(
+        "set_appointment_reminder",
+        {
+            "title": title,
+            "datetime": datetime,
+            "location": location,
+            "notes": notes,
+        },
+    )
+
+
 ALL_TOOLS = [
+    # Phase 1 — Communication + Camera
     make_voice_call,
     make_video_call,
     send_chat_message,
     read_unread_messages,
     activate_camera,
     deactivate_camera,
+    # Phase 2a — Health
+    set_medication_reminder,
+    list_medication_reminders,
+    mark_medication_taken,
+    mark_medication_skipped,
+    log_health_symptom,
+    log_health_metric,
+    set_appointment_reminder,
 ]
