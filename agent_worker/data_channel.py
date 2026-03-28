@@ -74,7 +74,7 @@ class DataChannelBridge:
                     )
                     return {"status": "error", "error": error_msg}
 
-                return {"status": "ok"}
+                return result
 
             except asyncio.TimeoutError:
                 if attempt < MAX_RETRIES:
