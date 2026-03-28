@@ -12,6 +12,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/auth"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/toolcall"
 	"github.com/team-dang/aiseebackend/internal/user"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/response"
@@ -77,9 +78,10 @@ func main() {
 		})
 	})
 
+	toolHandler := toolcall.NewHandler()
 	r.Route("/api/internal", func(r chi.Router) {
 		r.Use(middleware.InternalAuth(internalKey))
-		// Internal endpoints added in later tasks
+		r.Post("/tool-call", toolHandler.HandleToolCall)
 	})
 
 	port := os.Getenv("PORT")
