@@ -3,8 +3,10 @@ import logging
 from livekit.agents import AgentSession, Agent, RoomInputOptions
 from livekit.plugins import google
 
-from config import GEMINI_MODEL
-from tools import ALL_TOOLS
+from backend import BackendClient
+from config import GEMINI_MODEL, GO_BACKEND_URL, INTERNAL_API_KEY
+from data_channel import DataChannelBridge
+from tools import ALL_TOOLS, init_tools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aisee-agent")
@@ -34,6 +36,35 @@ class AiSeeAgent(Agent):
 
 async def entrypoint(ctx):
     agent = AiSeeAgent()
+    bridge = DataChannelBridge()
+    backend = BackendClient(GO_BACKEND_URL, INTERNAL_API_KEY)
+
+    # Get user_id from the first remote participant's identity
+    user_id = ""
+    for participant in ctx.room.remote_participants.values():
+        user_id = participant.identity
+        break
+
+    if not user_id:
+        logger.warning("No remote participant found, using empty user_id")
+
+    # Wire data channel callbacks
+    @ctx.room.on("data_received")
+    def on_data(data_packet, *_args, **_kwargs):
+        raw = (
+            data_packet.data
+            if hasattr(data_packet, "data")
+            else data_packet
+        )
+        bridge.on_data_received(raw)
+
+    # Initialize tool dependencies
+    init_tools(
+        backend=backend,
+        bridge=bridge,
+        local_participant=ctx.room.local_participant,
+        user_id=user_id,
+    )
 
     session = AgentSession(
         llm=google.realtime.RealtimeModel(
