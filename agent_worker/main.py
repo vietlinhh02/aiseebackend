@@ -1,59 +1,35 @@
 import asyncio
 import logging
-import math
-import struct
-import time
 
 from livekit import rtc
-from livekit.agents import AgentSession, Agent, WorkerOptions, cli
-from livekit.agents.voice.room_io import RoomOptions
-from livekit.plugins import google
+from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
+from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
+from livekit.plugins import google, noise_cancellation, silero
 
 from backend import BackendClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, GO_BACKEND_URL, INTERNAL_API_KEY
-from prompts import select_prompt
-from tools import ALL_TOOLS, init_tools
+from tools import AiSeeAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aisee-agent")
-
-IDLE_TIMEOUT = 30
-ENERGY_THRESHOLD = 0.02
-SPEECH_FRAMES_REQUIRED = 5
 
 
 async def _publish_state(local_participant, state: str):
     """Publish agent state as participant attribute for frontend UI."""
     try:
-        await local_participant.set_attributes({'lk.agent.state': state})
+        await local_participant.set_attributes(
+            {'lk.agent.state': state},
+        )
         logger.info("published state: %s", state)
     except Exception as exc:
         logger.warning("failed to publish state %s: %s", state, exc)
 
 
-class AiSeeAgent(Agent):
-    def __init__(self, tools, locale: str = 'vi', wake_up: bool = False):
-        super().__init__(
-            instructions=select_prompt(locale, wake_up),
-            tools=tools,
-        )
-
-
-def _compute_rms(data: bytes) -> float:
-    """Compute RMS energy of 16-bit PCM audio."""
-    n_samples = len(data) // 2
-    if n_samples == 0:
-        return 0.0
-    samples = struct.unpack(f"<{n_samples}h", data[: n_samples * 2])
-    return math.sqrt(sum(s * s for s in samples) / n_samples) / 32768.0
-
-
-async def entrypoint(ctx: AgentSession):
+async def entrypoint(ctx):
     logger.info("connecting to room %s", ctx.room.name)
     await ctx.connect()
     logger.info("connected to room %s", ctx.room.name)
 
-    # ── Debug: log all participants ────────────────────────
     local = ctx.room.local_participant
     await _publish_state(local, 'initializing')
     logger.info(
@@ -65,10 +41,6 @@ async def entrypoint(ctx: AgentSession):
             "remote_participant: identity=%s sid=%s kind=%s",
             p.identity, sid, p.kind,
         )
-    logger.info(
-        "total participants: %d remote + 1 local",
-        len(ctx.room.remote_participants),
-    )
 
     # Wait briefly so concurrent agents can see each other.
     await asyncio.sleep(1)
@@ -130,14 +102,15 @@ async def entrypoint(ctx: AgentSession):
     }
 
     def _read_user_attributes(participant):
-        """Read user attributes from participant into user_context."""
-        for key in ('user_name', 'user_id', 'locale', 'accessibility', 'has_family_link'):
+        for key in (
+            'user_name', 'user_id', 'locale',
+            'accessibility', 'has_family_link',
+        ):
             val = participant.attributes.get(key)
             if val:
                 user_context[key] = val
         logger.info("user_context updated: %s", user_context)
 
-    # Read from existing participants (user may have connected first)
     for p in ctx.room.remote_participants.values():
         if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
             _read_user_attributes(p)
@@ -148,7 +121,6 @@ async def entrypoint(ctx: AgentSession):
             return
         _read_user_attributes(participant)
 
-    # Resolve LiveKit participant identity for RPC targeting
     user_identity = ""
     for p in ctx.room.remote_participants.values():
         if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
@@ -167,25 +139,18 @@ async def entrypoint(ctx: AgentSession):
                 "updated user_identity=%s", participant.identity,
             )
 
-    init_tools(
-        backend=backend,
-        local_participant=ctx.room.local_participant,
-        user_context=user_context,
-    )
-
     # ── Lazy session state ──────────────────────────────────
     active_session: AgentSession | None = None
-    last_activity = 0.0
     first_start = True
+    vad_instance = ctx.proc.userdata["vad"]
 
     async def _start_session():
-        nonlocal active_session, last_activity, first_start
+        nonlocal active_session, first_start
         if active_session is not None:
             return
 
         wake_up = not first_start
         first_start = False
-        last_activity = time.monotonic()
 
         logger.info(
             "starting Gemini session (wake_up=%s) "
@@ -195,7 +160,9 @@ async def entrypoint(ctx: AgentSession):
         )
 
         agent = AiSeeAgent(
-            tools=ALL_TOOLS,
+            backend=backend,
+            local_participant=ctx.room.local_participant,
+            user_context=user_context,
             locale=user_context.get('locale', 'vi'),
             wake_up=wake_up,
         )
@@ -205,12 +172,23 @@ async def entrypoint(ctx: AgentSession):
                 api_key=GEMINI_API_KEY,
                 voice="Aoede",
             ),
+            user_away_timeout=30,
         )
+
+        @active_session.on("user_state_changed")
+        def _on_user_state(ev):
+            if ev.new_state == "away":
+                asyncio.create_task(_stop_session())
 
         await active_session.start(
             agent=agent,
             room=ctx.room,
-            room_options=RoomOptions(video_input=True),
+            room_options=RoomOptions(
+                video_input=True,
+                audio_input=AudioInputOptions(
+                    noise_cancellation=noise_cancellation.BVC(),
+                ),
+            ),
         )
 
     async def _stop_session():
@@ -222,8 +200,6 @@ async def entrypoint(ctx: AgentSession):
         await active_session.aclose()
         active_session = None
 
-        # Unpublish all agent audio tracks to prevent ghost speakers.
-        local = ctx.room.local_participant
         for pub in list(local.track_publications.values()):
             if pub.track and pub.track.kind == rtc.TrackKind.KIND_AUDIO:
                 logger.info(
@@ -237,24 +213,24 @@ async def entrypoint(ctx: AgentSession):
         )
 
     def _on_speech():
-        nonlocal last_activity
-        last_activity = time.monotonic()
         if active_session is None:
             asyncio.create_task(_start_session())
 
-    # ── VAD on user audio track ─────────────────────────────
-    async def _vad_loop(track: rtc.Track):
-        stream = rtc.AudioStream(track)
-        consecutive = 0
-        async for event in stream:
-            rms = _compute_rms(event.frame.data.tobytes())
-            if rms > ENERGY_THRESHOLD:
-                consecutive += 1
-                if consecutive >= SPEECH_FRAMES_REQUIRED:
-                    _on_speech()
-                    consecutive = 0
-            else:
-                consecutive = max(0, consecutive - 1)
+    # ── Silero VAD on user audio track ──────────────────────
+    async def _start_vad(track: rtc.Track):
+        audio_stream = rtc.AudioStream(track)
+        vad_stream = vad_instance.stream()
+
+        async def _push_frames():
+            async for event in audio_stream:
+                vad_stream.push_frame(event.frame)
+            vad_stream.end_input()
+
+        asyncio.create_task(_push_frames())
+
+        async for event in vad_stream:
+            if event.type == vad_mod.VADEventType.START_OF_SPEECH:
+                _on_speech()
 
     @ctx.room.on("track_subscribed")
     def on_track(track, publication, participant):
@@ -263,25 +239,13 @@ async def entrypoint(ctx: AgentSession):
             track.kind, participant.identity,
         )
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(_vad_loop(track))
+            asyncio.create_task(_start_vad(track))
 
-    # Handle tracks already subscribed before handler registered
     for participant in ctx.room.remote_participants.values():
         for pub in participant.track_publications.values():
             track = pub.track
             if track and track.kind == rtc.TrackKind.KIND_AUDIO:
-                asyncio.create_task(_vad_loop(track))
-
-    # ── Idle monitor ────────────────────────────────────────
-    async def _idle_monitor():
-        while True:
-            await asyncio.sleep(5)
-            if active_session and last_activity:
-                elapsed = time.monotonic() - last_activity
-                if elapsed > IDLE_TIMEOUT:
-                    await _stop_session()
-
-    asyncio.create_task(_idle_monitor())
+                asyncio.create_task(_start_vad(track))
 
     # ── Keep entrypoint alive until room disconnects ────────
     disconnect_event = asyncio.Event()
@@ -302,10 +266,15 @@ async def entrypoint(ctx: AgentSession):
     logger.info("entrypoint exiting")
 
 
+def prewarm(proc):
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name="aisee-agent",
-        )
+            prewarm_fnc=prewarm,
+        ),
     )
