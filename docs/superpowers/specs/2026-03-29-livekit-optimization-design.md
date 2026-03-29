@@ -14,48 +14,88 @@ Frontend has no visibility into what the agent is doing. UI shows only "Connecte
 
 ### Solution
 
-Agent publishes `lk.agent.state` participant attribute at each lifecycle transition. Frontend listens for attribute changes and updates UI accordingly.
+Two-layer approach:
+
+1. **AgentSession auto-publishes `lk.agent.state`** — when the inner `active_session` is running (Gemini live), the LiveKit agents framework automatically publishes `listening`, `thinking`, `speaking` states.
+2. **Agent manually publishes `lk.agent.state`** during periods when no AgentSession is active (idle timeout, pre-first-speech, shutdown) — using `local_participant.set_attributes()`.
+
+This avoids fighting the framework while covering the gaps.
 
 ### Agent States
 
-| State | When | Published at |
-|-------|------|-------------|
-| `initializing` | Agent joins room, setting up | `entrypoint()` start |
-| `idle` | Waiting for user input | After greeting, after TTS finishes |
-| `listening` | VAD detects user speech | `_on_vad` speech start |
-| `thinking` | Processing tool call or LLM generating | Tool call start, LLM inference start |
-| `speaking` | TTS audio playing | TTS audio start |
-| `disconnected` | Session ended cleanly | Session shutdown |
+| State | When | Source |
+|-------|------|--------|
+| `initializing` | Agent joins room, before first speech | Manual publish |
+| `idle` | No active AgentSession (before first speech, after idle timeout) | Manual publish |
+| `listening` | VAD detects user speech, AgentSession active | Framework auto |
+| `thinking` | LLM processing or tool call in progress | Framework auto |
+| `speaking` | TTS audio playing | Framework auto |
+| `disconnected` | Session ended cleanly | Manual publish (before room disconnect) |
 
 ### Backend Changes (agent_worker/main.py)
 
-Add helper:
-
 ```python
-async def _publish_state(participant: LocalParticipant, state: str):
-    await participant.set_attributes({'lk.agent.state': state})
+async def _publish_state(local_participant, state: str):
+    await local_participant.set_attributes({'lk.agent.state': state})
 ```
 
-Call at each transition point in the session lifecycle.
+Publish manually at:
+- `entrypoint()` after connect → `initializing`
+- After duplicate check passes → `idle`
+- `_stop_session()` first line (before `aclose()`) → `idle`
+- Before `disconnect_event`/`duplicate_event` cleanup → `disconnected`
+
+Framework handles `listening`, `thinking`, `speaking` automatically when `active_session` is running.
 
 ### Frontend Changes (Flutter)
 
 **aisee_livekit_voice_session.dart:**
-- Add `ValueNotifier<String> agentState = ValueNotifier('connecting')`
-- In room listener, add:
+- Add `ValueNotifier<AgentState> agentState = ValueNotifier(AgentState.connecting)`
+
+**New enum `AgentState`** (in a models file or inline):
+
+```dart
+enum AgentState {
+  connecting,
+  initializing,
+  idle,
+  listening,
+  thinking,
+  speaking,
+  disconnected,
+  failed;
+
+  static AgentState fromString(String? s) => switch (s) {
+    'initializing' => initializing,
+    'idle' => idle,
+    'listening' => listening,
+    'thinking' => thinking,
+    'speaking' => speaking,
+    'disconnected' => disconnected,
+    _ => connecting,
+  };
+
+  bool get canListen => this == listening || this == thinking || this == speaking;
+  bool get isConnected => this == listening || this == thinking || this == speaking;
+  bool get isPending => this == connecting || this == initializing || this == idle;
+  bool get isFinished => this == disconnected || this == failed;
+}
+```
+
+In room listener:
 
 ```dart
 ..on<ParticipantAttributesChanged>((event) {
   if (event.participant is RemoteParticipant) {
-    final state = event.participant.attributes['lk.agent.state'];
-    if (state != null) agentState.value = state;
+    final raw = event.participant.attributes['lk.agent.state'];
+    agentState.value = AgentState.fromString(raw);
   }
 })
 ```
 
 **user_assistant_tab.dart:**
-- Receive `agentState` ValueNotifier
-- Display localized text: `idle` = "San sang", `listening` = "Dang nghe...", `thinking` = "Dang xu ly...", `speaking` = "Dang tra loi..."
+- Receive `ValueNotifier<AgentState> agentState`
+- Display: `idle` → "San sang", `listening` → "Dang nghe...", `thinking` → "Dang xu ly...", `speaking` → "Dang tra loi..."
 
 ### Go Server Changes
 
@@ -71,7 +111,7 @@ Agent has no context about the user when session starts. Must ask or hardcode as
 
 ### Solution
 
-Frontend publishes user attributes after joining room. Agent reads them immediately. System prompt refactored to English base with locale-driven response language.
+Frontend publishes user attributes after joining room. Agent listens for `participant_attributes_changed` event to read them (handles race condition where agent connects before user sets attributes). System prompt uses locale-specific variants.
 
 ### Attributes
 
@@ -85,13 +125,25 @@ Frontend publishes user attributes after joining room. Agent reads them immediat
 
 ### Go Server Changes (pkg/livekit/client.go)
 
-Add `canUpdateOwnMetadata: true` to video grant in `CreateToken()`.
+Add `CanUpdateOwnMetadata` to video grant in `CreateToken()`:
+
+```go
+canUpdate := true
+grant := &auth.VideoGrant{
+    RoomJoin:             true,
+    Room:                 roomName,
+    CanUpdateOwnMetadata: &canUpdate,
+}
+```
 
 ### Frontend Changes (Flutter)
 
 **aisee_livekit_voice_session.dart:**
 - `connect()` receives additional params: `userName`, `userId`, `hasFamilyLink`
-- After `room.connect()` succeeds:
+- Ordering after `room.connect()`:
+  1. Register RPC methods (so agent can call them immediately)
+  2. Publish user attributes
+  3. Enable microphone
 
 ```dart
 await room.localParticipant?.setAttributes({
@@ -105,23 +157,44 @@ await room.localParticipant?.setAttributes({
 
 **user_home_screen.dart:**
 - Pass user data to `connect()` call
+- Remove `_liveKitDataLine` state, `liveKitPayloadDisplayText` import, `onDataUtf8` callback
 
 ### Backend Changes (agent_worker/main.py)
 
-- Read `participant.attributes` when user joins room
-- Use `user_name` in greeting
-- Use `user_id` for backend API calls
-- Use `locale` for language selection
+**Listen for attributes (handles race condition):**
 
-**System prompt refactor:**
-- Rewrite system prompt in English
-- Append locale instruction: `"Always respond in the user's language. User locale: {locale}. If locale starts with 'vi', speak Vietnamese. If 'en', speak English."`
-- Keep all behavior rules, only change authoring language
-- Gemini TTS voice "Aoede" supports multilingual
+```python
+user_context = {'user_id': user_id, 'locale': 'vi', 'user_name': ''}
+
+@ctx.room.on("participant_attributes_changed")
+def _on_user_attributes(changed_attributes, participant):
+    if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+        return
+    for key in ('user_name', 'user_id', 'locale', 'accessibility', 'has_family_link'):
+        val = participant.attributes.get(key)
+        if val:
+            user_context[key] = val
+    logger.info("user attributes updated: %s", user_context)
+```
+
+Also read attributes once at startup from existing remote participants (covers case where user connected first).
+
+**System prompt refactor — locale-specific variants:**
+
+Keep the current Vietnamese prompt as-is for `vi` locales (preserves cultural nuances like number-reading conventions). Add an English translation for `en` locales. Select based on `user_context['locale']`:
+
+```python
+def _select_prompt(locale: str, wake_up: bool) -> str:
+    base = SYSTEM_PROMPT_VI if locale.startswith('vi') else SYSTEM_PROMPT_EN
+    suffix = WAKEUP_SUFFIX if wake_up else GREETING_SUFFIX
+    return base + suffix
+```
+
+Both prompt variants contain identical behavior rules, just in different languages. This preserves natural phrasing per locale rather than relying on LLM translation.
 
 ---
 
-## 3. RPC for 6 App Tools
+## 3. RPC for App Tools
 
 ### Problem
 
@@ -129,59 +202,110 @@ Custom `tool_action` / `tool_action_ack` JSON protocol over raw data packets. No
 
 ### Solution
 
-Replace with LiveKit RPC. Agent calls `perform_rpc()`, frontend registers handlers via `registerRpcMethod()`. Built-in 10s timeout, error codes, retry.
+Replace with LiveKit RPC. Agent calls `perform_rpc()`, frontend registers handlers via `registerRpcMethod()`. Built-in timeout, error codes, structured error handling.
 
-### RPC Methods
+### RPC Methods (7 total)
 
-| Method | Payload (JSON) | Success Response (JSON) | Error |
-|--------|---------------|------------------------|-------|
-| `enable_camera` | `{}` | `{"status":"ok"}` | `RpcError(code, msg)` |
-| `disable_camera` | `{}` | `{"status":"ok"}` | `RpcError(code, msg)` |
-| `play_audio` | `{"url":"...","title":"..."}` | `{"status":"ok"}` | `RpcError(code, msg)` |
-| `control_audio` | `{"command":"pause\|resume\|stop"}` | `{"status":"ok"}` | `RpcError(code, msg)` |
-| `get_location` | `{}` | `{"lat":..,"lng":..,"address":".."}` | `RpcError(code, msg)` |
-| `open_maps` | `{"destination":".."}` or `{"lat":..,"lng":..}` | `{"status":"ok"}` | `RpcError(code, msg)` |
+| Method | Payload (JSON) | Success Response (JSON) | Timeout |
+|--------|---------------|------------------------|---------|
+| `enable_camera` | `{}` | `{"status":"ok"}` | 10s (default) |
+| `disable_camera` | `{}` | `{"status":"ok"}` | 10s |
+| `play_audio` | `{"url":"...","title":"..."}` | `{"status":"ok"}` | 10s |
+| `control_audio` | `{"command":"pause\|resume\|stop"}` | `{"status":"ok"}` | 10s |
+| `get_location` | `{}` | `{"lat":..,"lng":..,"address":".."}` | **15s** (cold GPS fix) |
+| `open_maps` | `{"destination":".."}` or `{"lat":..,"lng":..}` | `{"status":"ok"}` | 10s |
+| `schedule_reminder` | `{"type":"medication\|appointment","title":"...","times":[...],"datetime":"..."}` | `{"status":"ok"}` | 10s |
+
+### `_call_and_forward` Migration
+
+Three tools use backend HTTP + forward-to-app pattern:
+
+| Tool | Current flow | New flow |
+|------|-------------|----------|
+| `play_music` | Backend returns `play_audio_action` → `send_fire_and_forget` | Backend returns audio URL → agent calls `perform_rpc('play_audio', ...)` |
+| `set_medication_reminder` | Backend returns `schedule_reminder_action` → `send_fire_and_forget` | Backend returns result → agent calls `perform_rpc('schedule_reminder', ...)` |
+| `set_appointment_reminder` | Same as above | Same as above |
+
+The `_call_and_forward` helper is replaced by explicit two-step logic in each tool:
+
+```python
+@function_tool()
+async def play_music(query: str) -> dict:
+    result = await _backend.tool_call("play_music", _user_id, {"query": query})
+    play_action = result.pop("play_audio_action", None)
+    if play_action:
+        await _local_participant.perform_rpc(
+            destination_identity=_user_identity,
+            method="play_audio",
+            payload=json.dumps(play_action["params"]),
+        )
+    return result
+```
+
+### `control_music` — was fire-and-forget, now RPC
+
+Current code uses `send_fire_and_forget` for `control_audio`. With RPC, the agent will wait for a response. This is acceptable because:
+- Flutter handler returns immediately (no async work beyond `player.pause()`)
+- Default 10s timeout is more than enough
+- Agent gets confirmation the command succeeded (better than blind fire-and-forget)
 
 ### Backend Changes (agent_worker)
 
 **Delete:** `data_channel.py` entirely.
 
-**tools.py:** Replace `bridge.send_action()` calls with:
+**tools.py:**
+- Replace all `bridge.send_action()` → `_local_participant.perform_rpc()`
+- Replace all `bridge.send_fire_and_forget()` → `_local_participant.perform_rpc()`
+- Replace `_call_and_forward()` with explicit two-step logic per tool
+- `init_tools()` receives `user_identity` (string) instead of bridge
+- For `get_location` and `emergency_alert`: set `response_timeout=15.0`
 
 ```python
-response = await local_participant.perform_rpc(
-    destination_identity=user_identity,
-    method='enable_camera',
-    payload=json.dumps(params),
+response = await _local_participant.perform_rpc(
+    destination_identity=_user_identity,
+    method='get_location',
+    payload='{}',
+    response_timeout=15.0,
 )
 ```
 
-Agent catches `RpcError` and informs user verbally.
-
-**main.py:** Remove `DataChannelBridge` instantiation and data received handler for ack messages.
+**main.py:**
+- Remove `DataChannelBridge` import, instantiation, and `data_received` handler
+- Remove `on_data` room event handler
+- Pass `user_identity` to `init_tools()` instead of bridge
 
 ### Frontend Changes (Flutter)
 
 **aisee_livekit_voice_session.dart:**
 
-Register 6 methods before `room.connect()`:
+Register 7 methods **after** `room.connect()` succeeds (ensures room state is ready, handlers can access `_room?.localParticipant`):
 
 ```dart
 room.registerRpcMethod('enable_camera', (data) async {
     await _handleEnableCamera();
     return jsonEncode({'status': 'ok'});
 });
+room.registerRpcMethod('schedule_reminder', (data) async {
+    final params = jsonDecode(data.payload) as Map<String, dynamic>;
+    await _handleScheduleReminder(params);
+    return jsonEncode({'status': 'ok'});
+});
 // ... same pattern for other 5 methods
 ```
 
+Each handler has null-safety guards for `_room`, `_musicPlayer`, etc.
+
 **Delete:**
-- `_handleToolActionPayload()` (~280 lines of dispatch logic)
+- `_handleToolActionPayload()` — entire dispatch switch
 - `_sendToolActionAck()`
 - `_unwrapPayload()`, `_pickRequestId()`, `_onDataPayload()`
 - `onDataUtf8` callback parameter from `connect()`
-- `DataReceivedEvent` listener (unless needed for other purposes)
+- `DataReceivedEvent` listener
 
-**Keep:** Individual handler logic (camera enable, audio play, etc.) — just extract into standalone methods called by RPC handlers.
+**Keep:** Individual handler logic (camera enable, audio play, etc.) extracted into standalone `_handle*` methods.
+
+**Also delete:**
+- `livekit_payload_display.dart` (no more raw payloads to display)
 
 ### Go Server Changes
 
@@ -197,7 +321,7 @@ Current UI shows only waveform bars. No visual representation of the assistant. 
 
 ### Solution
 
-Replace `AssistantVoiceWaveform` with an animated orb (`CustomPainter` + `AnimationController`). Orb reacts to agent state and audio energy. Chartreuse accent on dark background. No external dependencies (no Lottie/Rive needed).
+Replace `AssistantVoiceWaveform` with an animated orb (`CustomPainter` + `AnimationController`). Orb reacts to agent state and audio energy. Chartreuse accent on dark background. No external dependencies.
 
 ### Orb Behavior by State
 
@@ -219,13 +343,14 @@ Replace `AssistantVoiceWaveform` with an animated orb (`CustomPainter` + `Animat
 ### Implementation
 
 **New widget: `AssistantOrb` (StatefulWidget)**
-- Input: `ValueNotifier<String> agentState`, `ValueNotifier<double> assistantWaveEnergy`
+- Input: `ValueNotifier<AgentState> agentState`, `ValueNotifier<double> assistantWaveEnergy`
 - 2 `AnimationController`: pulse (continuous) + energy scale (driven by notifier)
 - `CustomPainter` draws: filled circle with radial gradient + outer glow shadow
+- `shouldRepaint()` compares previous energy + state values — skip repaint when both unchanged
 - Wrapped in `RepaintBoundary` for paint isolation
 
 **Performance:**
-- Skip repaint when energy delta < 0.02
+- `shouldRepaint` on CustomPainter compares `oldEnergy`, `oldState` fields
 - No `BackdropFilter` or expensive blur
 - Only gradient + box shadow (GPU-friendly)
 
@@ -233,7 +358,7 @@ Replace `AssistantVoiceWaveform` with an animated orb (`CustomPainter` + `Animat
 
 - **New:** `lib/widgets/assistant_orb.dart`
 - **Modified:** `user_assistant_tab.dart` — replace `AssistantVoiceWaveform` with `AssistantOrb`
-- **Deprecate:** `assistant_voice_waveform.dart` — delete after orb is stable
+- **Delete:** `assistant_voice_waveform.dart` (replaced, not deprecated)
 
 ### Frontend Only
 
@@ -247,8 +372,8 @@ No backend or Go server changes.
 
 | File | Action |
 |------|--------|
-| `main.py` | Add `_publish_state()`, read user attributes, refactor system prompt to English + locale |
-| `tools.py` | Replace `bridge.send_action()` with `perform_rpc()` for 6 app tools |
+| `main.py` | Add `_publish_state()` for idle/init/disconnected, listen for user attributes, refactor prompt to locale-specific variants, remove DataChannelBridge + data_received handler |
+| `tools.py` | Replace `bridge.send_action()`/`send_fire_and_forget()` with `perform_rpc()`, replace `_call_and_forward()` with explicit two-step, add `schedule_reminder` RPC, use `user_identity` param |
 | `data_channel.py` | **Delete entirely** |
 | `config.py` | No changes |
 | `backend.py` | No changes |
@@ -257,33 +382,42 @@ No backend or Go server changes.
 
 | File | Action |
 |------|--------|
-| `pkg/livekit/client.go` | Add `canUpdateOwnMetadata: true` to token grant |
+| `pkg/livekit/client.go` | Add `CanUpdateOwnMetadata: &boolTrue` to token grant (pointer to bool) |
 
 ### Flutter App
 
 | File | Action |
 |------|--------|
-| `aisee_livekit_voice_session.dart` | Add agentState notifier, register 6 RPC methods, publish user attributes, remove data channel dispatch code |
-| `user_home_screen.dart` | Pass user data to connect(), receive agentState |
-| `user_assistant_tab.dart` | Receive agentState, replace waveform with orb, show state text |
+| `aisee_livekit_voice_session.dart` | Add `AgentState` enum + notifier, register 7 RPC methods after connect, publish user attributes, remove all data channel dispatch/ack code, remove `onDataUtf8` param |
+| `user_home_screen.dart` | Pass user data to connect(), receive agentState, remove `_liveKitDataLine` state + `liveKitPayloadDisplayText` import |
+| `user_assistant_tab.dart` | Receive agentState, replace waveform with orb, show state text, remove `liveKitDataLine` prop |
 | `assistant_orb.dart` | **New** — animated orb widget |
-| `assistant_voice_waveform.dart` | **Delete** |
-| `livekit_payload_display.dart` | **Delete** (no more raw data channel payloads to display) |
+| `assistant_voice_waveform.dart` | **Delete** (replaced by orb) |
+| `livekit_payload_display.dart` | **Delete** (no more raw data channel payloads) |
 
 ---
 
 ## Dependencies
 
-No new dependencies required for any component. All features use existing `livekit_client ^2.7.0` (Flutter) and `livekit-agents >=1.0.0` (Python) capabilities.
+No new dependencies required. All features use existing `livekit_client ^2.7.0` (Flutter) and `livekit-agents >=1.0.0` (Python) capabilities.
 
 ---
 
 ## Migration Notes
 
-- RPC change requires **coordinated deploy**: agent worker and Flutter app must update together. Old data channel protocol and new RPC are incompatible.
-- User attributes require token grant update (Go server) deployed before Flutter app update.
-- Agent state and orb are additive — can deploy independently.
+### Deploy Order
 
-**Recommended deploy order:**
-1. Go server (token grant update)
-2. Agent worker + Flutter app (simultaneous — RPC + state + attributes + orb)
+1. **Go server** — token grant update (`CanUpdateOwnMetadata`). Must deploy first; Flutter app needs this permission before it can set attributes.
+2. **Agent worker + Flutter app** — simultaneous deploy. RPC protocol is incompatible with old data channel protocol.
+
+### Coordinated Deploy Risk
+
+Old Flutter app (data channel) + new agent (RPC) = broken. Mitigation options:
+- **Forced app update** — require minimum app version before connecting
+- **Feature flag via user attribute** — agent checks `user.attributes.get('rpc_version')`, falls back to data channel if absent. Adds complexity; only needed if gradual rollout is required.
+
+Recommended: **forced app update** for simplicity. AiSee is early-stage; all users can update simultaneously.
+
+### Backward Compatibility
+
+None maintained. Old data channel protocol is removed entirely per project principle "Replace, don't deprecate."
