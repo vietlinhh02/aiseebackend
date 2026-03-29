@@ -2,6 +2,8 @@ package livekit
 
 import (
 	"testing"
+
+	"github.com/livekit/protocol/auth"
 )
 
 func TestNewClient_StoresParams(t *testing.T) {
@@ -45,5 +47,32 @@ func TestCreateToken_DifferentRoomsDifferentTokens(t *testing.T) {
 
 	if tok1 == tok2 {
 		t.Error("tokens for different rooms should differ")
+	}
+}
+
+func TestCreateToken_HasCanUpdateOwnMetadata(t *testing.T) {
+	c := NewClient("wss://lk.example.com", "test-api-key", "test-api-secret")
+
+	token, err := c.CreateToken("room-1", "user-abc", "Eddie")
+	if err != nil {
+		t.Fatalf("CreateToken failed: %v", err)
+	}
+
+	// Parse the JWT and verify the video grant includes CanUpdateOwnMetadata.
+	verifier, err := auth.ParseAPIToken(token)
+	if err != nil {
+		t.Fatalf("ParseAPIToken failed: %v", err)
+	}
+
+	_, grants, err := verifier.Verify("test-api-secret")
+	if err != nil {
+		t.Fatalf("Verify failed: %v", err)
+	}
+
+	if grants.Video == nil {
+		t.Fatal("expected video grant, got nil")
+	}
+	if grants.Video.CanUpdateOwnMetadata == nil || !*grants.Video.CanUpdateOwnMetadata {
+		t.Error("expected CanUpdateOwnMetadata to be true")
 	}
 }
