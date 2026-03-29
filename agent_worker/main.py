@@ -11,7 +11,6 @@ from livekit.plugins import google
 
 from backend import BackendClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, GO_BACKEND_URL, INTERNAL_API_KEY
-from data_channel import DataChannelBridge
 from prompts import select_prompt
 from tools import ALL_TOOLS, init_tools
 
@@ -109,7 +108,6 @@ async def entrypoint(ctx: AgentSession):
             logger.info("another agent joined, exiting")
             duplicate_event.set()
 
-    bridge = DataChannelBridge()
     backend = BackendClient(GO_BACKEND_URL, INTERNAL_API_KEY)
 
     user_id = ""
@@ -150,20 +148,29 @@ async def entrypoint(ctx: AgentSession):
             return
         _read_user_attributes(participant)
 
-    @ctx.room.on("data_received")
-    def on_data(data_packet, *_args, **_kwargs):
-        raw = (
-            data_packet.data
-            if hasattr(data_packet, "data")
-            else data_packet
-        )
-        bridge.on_data_received(raw)
+    # Resolve LiveKit participant identity for RPC targeting
+    user_identity = ""
+    for p in ctx.room.remote_participants.values():
+        if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            user_identity = p.identity
+            break
+    if not user_identity:
+        user_identity = user_id
+    user_context['user_identity'] = user_identity
+    logger.info("resolved user_identity=%s (for RPC)", user_identity)
+
+    @ctx.room.on("participant_connected")
+    def _on_user_identity_update(participant):
+        if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            user_context['user_identity'] = participant.identity
+            logger.info(
+                "updated user_identity=%s", participant.identity,
+            )
 
     init_tools(
         backend=backend,
-        bridge=bridge,
         local_participant=ctx.room.local_participant,
-        user_id=user_id,
+        user_context=user_context,
     )
 
     # ── Lazy session state ──────────────────────────────────
