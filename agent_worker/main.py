@@ -236,6 +236,33 @@ async def entrypoint(ctx: AgentSession):
 
     logger.info("resolved user_id=%s", user_id)
 
+    user_context = {
+        'user_id': user_id,
+        'user_name': '',
+        'locale': 'vi',
+        'accessibility': 'low_vision',
+        'has_family_link': 'false',
+    }
+
+    def _read_user_attributes(participant):
+        """Read user attributes from participant into user_context."""
+        for key in ('user_name', 'user_id', 'locale', 'accessibility', 'has_family_link'):
+            val = participant.attributes.get(key)
+            if val:
+                user_context[key] = val
+        logger.info("user_context updated: %s", user_context)
+
+    # Read from existing participants (user may have connected first)
+    for p in ctx.room.remote_participants.values():
+        if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            _read_user_attributes(p)
+
+    @ctx.room.on("participant_attributes_changed")
+    def _on_attributes(changed_attributes, participant):
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
+            return
+        _read_user_attributes(participant)
+
     @ctx.room.on("data_received")
     def on_data(data_packet, *_args, **_kwargs):
         raw = (
