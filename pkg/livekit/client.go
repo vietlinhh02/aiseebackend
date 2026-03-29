@@ -14,10 +14,18 @@ type Client struct {
 	apiKey    string
 	apiSecret string
 	host      string
+	roomSvc   *lksdk.RoomServiceClient
+	dispSvc   *lksdk.AgentDispatchClient
 }
 
 func NewClient(host, apiKey, apiSecret string) *Client {
-	return &Client{host: host, apiKey: apiKey, apiSecret: apiSecret}
+	return &Client{
+		host:      host,
+		apiKey:    apiKey,
+		apiSecret: apiSecret,
+		roomSvc:   lksdk.NewRoomServiceClient(host, apiKey, apiSecret),
+		dispSvc:   lksdk.NewAgentDispatchServiceClient(host, apiKey, apiSecret),
+	}
 }
 
 func (c *Client) CreateToken(roomName, identity, name string) (string, error) {
@@ -37,7 +45,7 @@ func (c *Client) CreateToken(roomName, identity, name string) (string, error) {
 }
 
 func (c *Client) RoomClient() *lksdk.RoomServiceClient {
-	return lksdk.NewRoomServiceClient(c.host, c.apiKey, c.apiSecret)
+	return c.roomSvc
 }
 
 func (c *Client) CreateRoom(
@@ -94,15 +102,15 @@ func (c *Client) CreateRoomWithTimeout(
 }
 
 func (c *Client) DispatchClient() *lksdk.AgentDispatchClient {
-	return lksdk.NewAgentDispatchServiceClient(
-		c.host, c.apiKey, c.apiSecret,
-	)
+	return c.dispSvc
 }
 
 func (c *Client) CreateRoomWithAgent(
 	ctx context.Context, roomName string,
 ) error {
-	// Always delete stale room to clear old auto-dispatch config.
+	// Delete stale room to prevent dispatch accumulation.
+	// CreateDispatch is not idempotent — calling it on an existing
+	// room adds another dispatch, spawning a duplicate agent.
 	_ = c.DeleteRoom(ctx, roomName)
 
 	_, err := c.RoomClient().CreateRoom(
