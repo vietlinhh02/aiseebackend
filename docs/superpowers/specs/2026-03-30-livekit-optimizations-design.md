@@ -29,22 +29,35 @@ Remove:
 
 Add:
 ```python
+from livekit.agents import vad as vad_mod
 from livekit.plugins import silero
 
-# In _start_vad(track):
+# Pre-loaded VAD instance (see section 4 — prewarm)
+# _vad is set from ctx.proc.userdata["vad"] in entrypoint
+
 async def _start_vad(track: rtc.Track):
-    vad = silero.VAD.load()
-    stream = vad.stream(track)
-    async for event in stream:
-        if event.type == silero.VADEventType.START_OF_SPEECH:
+    audio_stream = rtc.AudioStream(track)
+    vad_stream = _vad.stream()
+
+    async def _push_frames():
+        async for event in audio_stream:
+            vad_stream.push_frame(event.frame)
+        vad_stream.end_input()
+
+    asyncio.create_task(_push_frames())
+
+    async for event in vad_stream:
+        if event.type == vad_mod.VADEventType.START_OF_SPEECH:
             _on_speech()
 ```
+
+The `VAD.stream()` returns a `VADStream`. Audio frames are pushed via `push_frame(frame)` and events are consumed via async iteration. Two concurrent tasks: one pushes frames from the `rtc.AudioStream`, the other iterates `VADEvent` objects checking for `START_OF_SPEECH`.
 
 Wire `_start_vad` into `track_subscribed` handler (same trigger point as current `_vad_loop`).
 
 ### Dependency
 
-`pyproject.toml`: add `livekit-plugins-silero>=1.0.0`
+`pyproject.toml`: add `livekit-plugins-silero~=1.0`
 
 ---
 
@@ -60,6 +73,7 @@ Add BVC (Browser Voice Cancellation) noise cancellation to `RoomOptions` when st
 
 ### Changes — `main.py`
 
+Import path verified against installed SDK (`livekit.agents.voice.room_io`):
 ```python
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import noise_cancellation
@@ -79,7 +93,7 @@ await active_session.start(
 
 ### Dependency
 
-`pyproject.toml`: add `livekit-plugins-noise-cancellation>=0.2.0`
+`pyproject.toml`: add `livekit-plugins-noise-cancellation~=0.2`
 
 ---
 
@@ -109,10 +123,12 @@ active_session = AgentSession(
 )
 
 @active_session.on("user_state_changed")
-def _on_user_state(state):
-    if state == "away":
+def _on_user_state(ev):
+    if ev.new_state == "away":
         asyncio.create_task(_stop_session())
 ```
+
+The `user_away_timeout` uses a simple `asyncio.TimerHandle` internally (verified in SDK source). It fires when both user and agent are in "listening" state for 30s — no VAD dependency. The timer resets whenever user or agent state changes (speech, thinking, tool use). This is compatible with the lazy session pattern: the Gemini realtime model handles audio processing and state transitions internally.
 
 Modify `_on_speech()`: remove `last_activity = time.monotonic()`, keep only the session-start trigger.
 
@@ -130,9 +146,11 @@ Pre-load the Silero model when the worker process starts, before any job is disp
 
 ### Changes — `main.py`
 
+Store the loaded model in `proc.userdata` so the entrypoint reuses it instead of loading again:
+
 ```python
-async def prewarm(proc):
-    silero.VAD.load()
+def prewarm(proc):
+    proc.userdata["vad"] = silero.VAD.load()
 
 if __name__ == "__main__":
     cli.run_app(
@@ -143,6 +161,10 @@ if __name__ == "__main__":
         ),
     )
 ```
+
+In `entrypoint()`, retrieve via: `_vad = ctx.proc.userdata["vad"]`
+
+Note: `prewarm_fnc` is a sync function (not async). The `WorkerOptions` + `cli.run_app` pattern is still supported in the installed SDK version alongside the newer `AgentServer` pattern.
 
 ---
 
@@ -158,6 +180,8 @@ Lazy-initialize and cache both clients on the `Client` struct.
 
 ### Changes — `pkg/livekit/client.go`
 
+Initialize both clients eagerly in `NewClient()`. The constructors are cheap (just store config; HTTP client is created on first use). This avoids data races — multiple goroutines call `RoomClient()` concurrently from different HTTP handlers.
+
 ```go
 type Client struct {
     apiKey    string
@@ -167,26 +191,28 @@ type Client struct {
     dispSvc   *lksdk.AgentDispatchClient
 }
 
-func (c *Client) RoomClient() *lksdk.RoomServiceClient {
-    if c.roomSvc == nil {
-        c.roomSvc = lksdk.NewRoomServiceClient(
-            c.host, c.apiKey, c.apiSecret,
-        )
+func NewClient(host, apiKey, apiSecret string) *Client {
+    return &Client{
+        host:      host,
+        apiKey:    apiKey,
+        apiSecret: apiSecret,
+        roomSvc: lksdk.NewRoomServiceClient(
+            host, apiKey, apiSecret,
+        ),
+        dispSvc: lksdk.NewAgentDispatchServiceClient(
+            host, apiKey, apiSecret,
+        ),
     }
+}
+
+func (c *Client) RoomClient() *lksdk.RoomServiceClient {
     return c.roomSvc
 }
 
 func (c *Client) DispatchClient() *lksdk.AgentDispatchClient {
-    if c.dispSvc == nil {
-        c.dispSvc = lksdk.NewAgentDispatchServiceClient(
-            c.host, c.apiKey, c.apiSecret,
-        )
-    }
     return c.dispSvc
 }
 ```
-
-No sync needed — `Client` is created once at server startup and used from a single goroutine context per request (the HTTP handler already serializes access).
 
 ---
 
@@ -199,6 +225,8 @@ No sync needed — `Client` is created once at server startup and used from a si
 ### Solution
 
 Move tool functions to methods on `AiSeeAgent` class. Pass dependencies via constructor. Tools access state through `self`.
+
+Verified: `@function_tool()` works on instance methods. The SDK's `_BaseFunctionTool` implements `__get__` (descriptor protocol) which binds `self` and strips it from the function signature exposed to the LLM. See `tool_context.py:201-206`.
 
 ### Changes — `tools.py`
 
@@ -279,45 +307,26 @@ No code changes needed on agent side — the framework handles this. Document th
 
 ---
 
-## 8. Remove stale room deletion from CreateRoomWithAgent
+## 8. Keep stale room deletion — add comment explaining why
 
 ### Problem
 
-`CreateRoomWithAgent()` in `client.go:106` calls `DeleteRoom` before `CreateRoom` to clear stale auto-dispatch config. This is a workaround, not a fix — it causes a brief window where the room does not exist.
+`CreateRoomWithAgent()` in `client.go:106` calls `DeleteRoom` before `CreateRoom`. This was originally thought to be removable, but `CreateDispatch` idempotency is unverified — calling it multiple times for the same `(agent_name, room)` pair may accumulate duplicate dispatches, each spawning an agent.
 
 ### Solution
 
-Remove the preemptive `DeleteRoom` call. LiveKit Cloud handles room recreation correctly — `CreateRoom` with the same name either returns the existing room or creates a new one. The dispatch is per-room, not per-room-name.
+Keep the current `DeleteRoom` call. The existing duplicate-agent detection in `main.py:77-83` provides a safety net, but preventing duplicate dispatches at the source is better than relying on the agent to self-terminate.
 
-### Changes — `pkg/livekit/client.go`
+Add a comment explaining the intent:
 
 ```go
-func (c *Client) CreateRoomWithAgent(
-    ctx context.Context, roomName string,
-) error {
-    _, err := c.RoomClient().CreateRoom(
-        ctx, &lkproto.CreateRoomRequest{
-            Name:             roomName,
-            EmptyTimeout:     300,
-            DepartureTimeout: 30,
-        },
-    )
-    if err != nil {
-        return fmt.Errorf("create room %s: %w", roomName, err)
-    }
-
-    _, err = c.DispatchClient().CreateDispatch(
-        ctx, &lkproto.CreateAgentDispatchRequest{
-            AgentName: "aisee-agent",
-            Room:      roomName,
-        },
-    )
-    if err != nil {
-        return fmt.Errorf("dispatch agent to %s: %w", roomName, err)
-    }
-    return nil
-}
+// Delete stale room to prevent dispatch accumulation.
+// CreateDispatch is not idempotent — calling it on an existing
+// room adds another dispatch, spawning a duplicate agent.
+_ = c.DeleteRoom(ctx, roomName)
 ```
+
+No code changes — only add the comment.
 
 ---
 
@@ -327,10 +336,10 @@ func (c *Client) CreateRoomWithAgent(
 
 ```toml
 dependencies = [
-    "livekit-agents[images]>=1.0.0",
-    "livekit-plugins-google>=1.0.0",
-    "livekit-plugins-silero>=1.0.0",
-    "livekit-plugins-noise-cancellation>=0.2.0",
+    "livekit-agents[images]~=1.0",
+    "livekit-plugins-google~=1.0",
+    "livekit-plugins-silero~=1.0",
+    "livekit-plugins-noise-cancellation~=0.2",
     "httpx>=0.27.0",
 ]
 ```
@@ -346,7 +355,7 @@ dependencies = [
 | `agent_worker/pyproject.toml` | Edit | Add silero + noise-cancellation deps |
 | `agent_worker/main.py` | Edit | Silero VAD, noise cancellation, user_away_timeout, prewarm, remove custom VAD/idle |
 | `agent_worker/tools.py` | Rewrite | Tools as AiSeeAgent class methods, remove global state |
-| `pkg/livekit/client.go` | Edit | Cache clients, remove stale room deletion |
+| `pkg/livekit/client.go` | Edit | Eager-init cached clients, add comment on DeleteRoom |
 
 ---
 
@@ -357,8 +366,8 @@ dependencies = [
 | Silero VAD sensitivity differs from custom RMS | Test with Vietnamese speech samples; Silero is more accurate by design |
 | Noise cancellation adds latency | BVC is optimized for realtime; measure round-trip in staging |
 | `user_away_timeout` event timing | Verify event fires correctly with lazy session pattern |
-| Tools refactor breaks tool registration | Verify all 23 tools register correctly via agent framework |
-| Stale room deletion removal | Test that CreateRoom is idempotent on LiveKit Cloud |
+| Tools refactor breaks tool registration | Verify all 22 tools register correctly via agent framework |
+| Dual VAD (standalone + AgentSession internal) | Acceptable cost; standalone VAD is lightweight inference only |
 
 ---
 
@@ -368,3 +377,4 @@ dependencies = [
 - MultilingualModel turn detection (requires always-on STT, incompatible with lazy session)
 - Gemini model version upgrade (separate evaluation needed)
 - `delete_room_on_close` on AgentSession (only works for user rooms, needs more analysis)
+- Migration to `AgentServer` / `@server.rtc_session()` pattern (current `WorkerOptions` + `cli.run_app` still works)
