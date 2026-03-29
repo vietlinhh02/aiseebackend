@@ -126,7 +126,7 @@ async def set_medication_reminder(
         {"medicine_name": medicine_name, "dosage": dosage,
          "times": times, "frequency": frequency},
     )
-    reminder_action = result.pop("schedule_reminder_action", None)
+    reminder_action = result.pop("schedule_action", None)
     if reminder_action and isinstance(reminder_action, dict):
         try:
             await _local_participant.perform_rpc(
@@ -214,7 +214,7 @@ async def set_appointment_reminder(
         {"title": title, "datetime": datetime,
          "location": location, "notes": notes},
     )
-    reminder_action = result.pop("schedule_reminder_action", None)
+    reminder_action = result.pop("schedule_action", None)
     if reminder_action and isinstance(reminder_action, dict):
         try:
             await _local_participant.perform_rpc(
@@ -282,7 +282,7 @@ async def play_music(query: str) -> dict:
     result = await _backend.tool_call(
         "play_music", _uid(), {"query": query},
     )
-    play_action = result.pop("play_audio_action", None)
+    play_action = result.pop("play_action", None)
     if play_action and isinstance(play_action, dict):
         try:
             await _local_participant.perform_rpc(
