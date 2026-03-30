@@ -15,15 +15,17 @@ services:
     ports:
       - "6379:6379"
 
-  livekit:
-    image: livekit/livekit-server:latest
-    command: --dev --bind 0.0.0.0
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "50000-50060:50000-50060/udp"
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      LIVEKIT_KEYS: "devkey: devsecret"
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
 
   backend:
     build: .
@@ -32,21 +34,29 @@ services:
     depends_on:
       - postgres
       - redis
-      - livekit
+      - minio
     env_file: .env
+    environment:
+      - DATABASE_URL=postgres://aisee:aisee@postgres:5432/aisee?sslmode=disable
+      - REDIS_URL=redis://redis:6379/0
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
 
   agent:
     build: ./agent_worker
-    depends_on:
-      - livekit
-      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
     environment:
-      LIVEKIT_URL: ws://livekit:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: devsecret
-      GO_BACKEND_URL: http://backend:8080/api/internal
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      - LIVEKIT_URL=${LIVEKIT_URL}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - GO_BACKEND_URL=${GO_BACKEND_URL:-http://host.docker.internal:8080/api/internal}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-live-preview}
 
 volumes:
   pgdata:
+  minio_data:
