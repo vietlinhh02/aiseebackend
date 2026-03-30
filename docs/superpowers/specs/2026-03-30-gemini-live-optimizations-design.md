@@ -10,7 +10,7 @@ Five optimizations, ordered by impact:
 
 1. User context injection into system prompt
 2. Video-on-demand (audio-only by default)
-3. Session resumption via `send_client_content`
+3. Session resumption via native `SessionResumptionConfig`
 4. VAD sensitivity tuning
 5. thinkingLevel = `low`
 
@@ -65,9 +65,11 @@ If no family is linked, do not suggest calling family or SOS.
 
 ### Design
 
-Start sessions in audio-only mode. When camera is toggled, restart the session with the new video setting. Session resumption (Section 3) preserves context across restarts.
+Start sessions in audio-only mode. When camera is toggled, restart the session with the new video setting. Native session resumption (Section 3) preserves context across restarts.
 
-**State tracking:** Add a module-level `video_enabled: bool = False` flag in the entrypoint scope (alongside `active_session`, `first_start`, etc.).
+**Note on 2-minute limit:** The `livekit-plugins-google` plugin has built-in session resumption that may transparently handle session timeouts via reconnect. The primary motivation for video-on-demand is still valid: avoid sending unnecessary video frames (token cost) and extend the session window. Video toggle will lose conversation context until Section 3 (session resumption) is implemented.
+
+**State tracking:** Add an entrypoint-scoped `video_enabled: bool = False` closure variable (alongside `active_session`, `first_start`, etc.).
 
 **Session start:** `_start_session()` reads `video_enabled` to set `RoomOptions(video_input=video_enabled)`.
 
@@ -76,9 +78,8 @@ Start sessions in audio-only mode. When camera is toggled, restart the session w
 2. `deactivate_camera` tool: RPC to disable camera on client → set `video_enabled = False` → call `_restart_session()`
 
 **`_restart_session()`:** New function that:
-1. Requests summary from current session (Section 3)
-2. Calls `_stop_session()`
-3. Calls `_start_session()` — which picks up `video_enabled` and seeds summary
+1. Calls `_stop_session()`
+2. Calls `_start_session()` — which picks up `video_enabled` and uses session resumption handle (Section 3) to preserve context
 
 **Tool changes:** `activate_camera` and `deactivate_camera` need access to the entrypoint's `video_enabled` flag and `_restart_session()`. Two options:
 - Pass a callback to `AiSeeAgent` that tools can call
@@ -101,34 +102,36 @@ When a session closes (user away timeout, video toggle), all conversation contex
 
 ### Design
 
-**Save summary on stop:**
-- Before `active_session.aclose()`, send a prompt to the model asking for a 2-3 sentence summary of the conversation
-- Store the summary text in `last_session_summary: str` (in-memory, entrypoint scope)
-- Timeout: 3 seconds. If model doesn't respond in time, proceed without summary
-- Summary prompt: `"Summarize our conversation so far in 2-3 sentences for context continuity."`
+Use the native `SessionResumptionConfig` built into `livekit-plugins-google`. The plugin already supports:
+- `RealtimeModel` accepts a `session_resumption` parameter
+- `RealtimeSession` tracks a `session_resumption_handle` property
+- On reconnect, the plugin passes the handle in `_build_connect_config`
+- The server sends `session_resumption_update` with new handles
 
-**Seed summary on start:**
-- Gemini 3.1 supports `send_client_content` for initial context seeding (only at session start)
-- In `_start_session()`, if `last_session_summary` is non-empty, send it via `send_client_content` with role `user` and prefix: `"[Tóm tắt cuộc trò chuyện trước: {summary}]"` (or English equivalent based on locale)
-- Clear `last_session_summary` after seeding
+**Implementation:**
+
+1. Pass `session_resumption=types.SessionResumptionConfig()` to `RealtimeModel` constructor
+2. Before `_stop_session()`, capture the current `session_resumption_handle` from the active session
+3. Store the handle in an entrypoint-scoped `last_resumption_handle: str | None` variable
+4. On `_start_session()`, pass the stored handle to the new `RealtimeModel` via `SessionResumptionConfig(handle=last_resumption_handle)`
+
+**Advantages over custom summary approach:**
+- Preserves full conversation state (not a lossy 2-3 sentence summary)
+- No need to access private `send_client_content` API
+- No need to request a text summary from a voice session (which would speak it aloud)
+- Zero custom code beyond passing config
 
 **Edge cases:**
-- User away 30s → returns → new session has summary → agent remembers context
-- Video toggle → session restart → summary preserves continuity
-- App disconnect → summary lost (in-memory only) → acceptable for demo
-- Summary request times out → session stops normally, no summary → next session starts fresh
+- User away 30s → returns → new session with resumption handle → full context restored
+- Video toggle → session restart → handle preserves continuity
+- App disconnect → handle lost (in-memory only) → acceptable for demo
+- Handle expired or invalid → Gemini starts fresh session, no error
+
+**Caveat:** When video mode changes (Section 2), the model config changes. The resumption handle may not work across config changes. If it fails, the session starts fresh — acceptable degradation. Verify during implementation.
 
 ### Changes
 
-- `main.py`: Add `last_session_summary` variable, `_request_summary()` async function (with 3s timeout), modify `_stop_session()` to call it before close, modify `_start_session()` to seed summary via `send_client_content`
-
-### Open Question
-
-LiveKit's `AgentSession` may not expose a direct `send_client_content` method. The actual API depends on how `livekit-plugins-google` wraps the Gemini Live API. Need to verify during implementation whether:
-- `AgentSession` exposes `send_client_content` directly
-- Or we need to access the underlying `google.realtime.RealtimeSession` to call it
-
-Similarly, requesting a summary before close requires sending a text message to the model and waiting for a response — need to verify the API for this.
+- `main.py`: Add `last_resumption_handle` variable, capture handle before `_stop_session()`, pass handle to `RealtimeModel` in `_start_session()`. Need to verify how to access the handle from `AgentSession` → `RealtimeSession` → `session_resumption_handle` property.
 
 ---
 
@@ -140,21 +143,29 @@ Gemini's built-in VAD runs with default sensitivity. Users with low vision may s
 
 ### Design
 
-Configure Gemini RealtimeModel VAD parameters:
-- `end_of_speech_sensitivity: LOW` — wait longer before treating silence as end-of-speech
-- `start_of_speech_sensitivity: HIGH` — detect user speech quickly to interrupt agent
-- `prefix_padding_ms: 100` — capture extra audio at start of utterance
-- `silence_duration_ms: 500` — require 500ms silence to mark end-of-speech
+Configure Gemini RealtimeModel VAD via `realtime_input_config` parameter, which the plugin passes through to the Gemini API:
 
-These are Gemini API parameters, independent of the Silero VAD used for lazy session startup. Both systems coexist: Silero detects speech to trigger session creation; Gemini VAD handles turn-taking within the session.
+```python
+realtime_input_config=types.RealtimeInputConfig(
+    automatic_activity_detection=types.AutomaticActivityDetection(
+        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+        prefix_padding_ms=100,
+        silence_duration_ms=500,
+    ),
+)
+```
+
+- `END_SENSITIVITY_LOW` — wait longer before treating silence as end-of-speech (helps hesitant speakers)
+- `START_SENSITIVITY_HIGH` — detect user speech quickly to interrupt agent
+- `prefix_padding_ms: 100` — capture extra audio at start of utterance (avoid missing first word)
+- `silence_duration_ms: 500` — require 500ms silence to mark end-of-speech (default ~200ms)
+
+These are Gemini API parameters, independent of the Silero VAD used for lazy session startup. Both systems coexist: Silero detects speech to trigger session creation; Gemini VAD handles turn-taking within the session. Review Silero VAD settings for consistency — if Silero is more aggressive than Gemini, it could trigger a new session start while a user is still mid-utterance.
 
 ### Changes
 
-- `main.py`: Pass VAD config to `google.realtime.RealtimeModel()` constructor
-
-### Open Question
-
-Need to verify how `livekit-plugins-google` exposes Gemini VAD configuration. The params may be passed as a dict, a config object, or may not be exposed at all (requiring a plugin update or direct API call).
+- `main.py`: Pass `realtime_input_config` to `google.realtime.RealtimeModel()` constructor
 
 ---
 
@@ -162,20 +173,28 @@ Need to verify how `livekit-plugins-google` exposes Gemini VAD configuration. Th
 
 ### Problem
 
-Default `thinkingLevel` is `minimal` — lowest latency but basic reasoning. For demo quality, image descriptions and multi-step emergency handling benefit from more reasoning.
+Default `thinkingLevel` is unspecified (model-dependent behavior). For demo quality, image descriptions and multi-step emergency handling benefit from explicit reasoning.
 
 ### Design
 
-Set `thinkingLevel: "low"` in RealtimeModel config. This adds a small latency cost but improves response quality for:
+Set thinking config to `LOW` in RealtimeModel:
+
+```python
+thinking_config=types.ThinkingConfig(
+    thinking_level=types.ThinkingLevel.LOW,
+)
+```
+
+This adds a small latency cost but improves response quality for:
 - Camera scene descriptions (safety-first, spatial reasoning)
 - Multi-step emergency escalation logic
 - Complex tool selection (which contact to call, which escalation level)
 
-Not using `medium` or `high` — latency too high for real-time voice.
+Not using `MEDIUM` or `HIGH` — latency too high for real-time voice. Easy to revert if too slow.
 
 ### Changes
 
-- `main.py`: Add `thinking_level="low"` to `google.realtime.RealtimeModel()` constructor
+- `main.py`: Add `thinking_config` to `google.realtime.RealtimeModel()` constructor
 
 ---
 
@@ -197,6 +216,6 @@ Items 1-3 can be done in parallel. Item 4 before 5.
 |------|------|------------|
 | User context injection | Low — prompt change only | Test with/without user_name set |
 | Video-on-demand | Medium — session restart may cause audio gap | Buffer audio during restart (existing pattern) |
-| Session resumption | High — depends on unverified LiveKit/Gemini API | Graceful fallback: skip if API unavailable |
-| VAD tuning | Low-Medium — params may not be exposed by plugin | Fallback: use defaults |
+| Session resumption | Medium — native API supported, handle may not survive config changes | Graceful fallback: fresh session if handle invalid |
+| VAD tuning | Low — params verified as supported by plugin | Fallback: use defaults if model rejects |
 | thinkingLevel | Low — config only | Easy to revert to minimal if too slow |
