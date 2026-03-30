@@ -9,6 +9,8 @@ from livekit.agents.voice.io import AudioInput
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import google, noise_cancellation, silero
 
+from google.genai import types as gemini_types
+
 from backend import BackendClient
 from config import GEMINI_API_KEY, GEMINI_MODEL, GO_BACKEND_URL, INTERNAL_API_KEY
 from tools import AiSeeAgent
@@ -210,6 +212,25 @@ async def entrypoint(ctx):
                 model=GEMINI_MODEL,
                 api_key=GEMINI_API_KEY,
                 voice="Aoede",
+                thinking_config=gemini_types.ThinkingConfig(
+                    thinking_level=gemini_types.ThinkingLevel.LOW,
+                ),
+                realtime_input_config=gemini_types.RealtimeInputConfig(
+                    automatic_activity_detection=(
+                        gemini_types.AutomaticActivityDetection(
+                            start_of_speech_sensitivity=(
+                                gemini_types.StartSensitivity
+                                .START_SENSITIVITY_HIGH
+                            ),
+                            end_of_speech_sensitivity=(
+                                gemini_types.EndSensitivity
+                                .END_SENSITIVITY_LOW
+                            ),
+                            prefix_padding_ms=100,
+                            silence_duration_ms=500,
+                        )
+                    ),
+                ),
             ),
             user_away_timeout=30,
         )
