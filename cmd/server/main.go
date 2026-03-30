@@ -23,12 +23,14 @@ import (
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
+	"github.com/team-dang/aiseebackend/internal/upload"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/internal/volunteer"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/push"
 	"github.com/team-dang/aiseebackend/pkg/reminder"
 	"github.com/team-dang/aiseebackend/pkg/response"
+	"github.com/team-dang/aiseebackend/pkg/storage"
 )
 
 func main() {
@@ -67,9 +69,39 @@ func main() {
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	internalKey := os.Getenv("INTERNAL_API_KEY")
+	googleWebClientID := os.Getenv("GOOGLE_WEB_CLIENT_ID")
+
+	if googleWebClientID != "" {
+		slog.Info("Google Sign-In configured", "web_client_id", googleWebClientID)
+	} else {
+		slog.Warn("GOOGLE_WEB_CLIENT_ID not set, skipping audience verification")
+	}
 
 	// Push notification senders
 	pusher := initPusher()
+
+	// S3 / MinIO storage
+	storageClient, err := storage.NewClient(storage.Config{
+		Endpoint:  os.Getenv("S3_ENDPOINT"),
+		AccessKey: os.Getenv("S3_ACCESS_KEY"),
+		SecretKey: os.Getenv("S3_SECRET_KEY"),
+		Bucket:    os.Getenv("S3_BUCKET"),
+		UseSSL:    os.Getenv("S3_USE_SSL") == "true",
+	})
+	if err != nil {
+		slog.Error("storage client init failed", "error", err)
+		os.Exit(1)
+	}
+	if err := storageClient.EnsureBucket(
+		context.Background(),
+	); err != nil {
+		slog.Warn(
+			"bucket setup failed, uploads may not work",
+			"error", err,
+		)
+	}
+
+	uploadHandler := upload.NewHandler(storageClient)
 
 	// Services
 	queries := dbgen.New(pool)
@@ -143,6 +175,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
+	r.Use(middleware.RequestLog)
 	r.Use(chiMiddleware.Recoverer)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +217,9 @@ func main() {
 			r.Post("/messages/send", chatHandler.SendMessage)
 			r.Get("/messages/{contactID}", chatHandler.GetMessages)
 			r.Put("/messages/{id}/read", chatHandler.MarkRead)
+
+			// Upload
+			r.Post("/upload", uploadHandler.Upload)
 
 			// Dashboard (family)
 			r.Route("/dashboard/{user_id}", func(r chi.Router) {
