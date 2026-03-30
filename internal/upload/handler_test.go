@@ -33,7 +33,7 @@ func (m *mockStorage) Upload(
 }
 
 func createMultipartRequest(
-	t *testing.T, fieldName, filename, contentType string,
+	t *testing.T, fieldName, filename string,
 	content []byte,
 ) *http.Request {
 	t.Helper()
@@ -58,7 +58,7 @@ func TestUpload_Success_Audio(t *testing.T) {
 	h := NewHandler(store)
 
 	req := createMultipartRequest(
-		t, "file", "voice.m4a", "audio/mp4",
+		t, "file", "voice.m4a",
 		[]byte("fake audio data"),
 	)
 	req = req.WithContext(
@@ -85,7 +85,7 @@ func TestUpload_RejectsDisallowedType(t *testing.T) {
 	h := NewHandler(store)
 
 	req := createMultipartRequest(
-		t, "file", "malware.exe", "application/octet-stream",
+		t, "file", "malware.exe",
 		[]byte("bad data"),
 	)
 	req = req.WithContext(
@@ -150,7 +150,7 @@ func TestUpload_StorageError(t *testing.T) {
 	h := NewHandler(store)
 
 	req := createMultipartRequest(
-		t, "file", "voice.m4a", "audio/mp4",
+		t, "file", "voice.m4a",
 		[]byte("fake audio data"),
 	)
 	req = req.WithContext(
@@ -173,7 +173,7 @@ func TestUpload_KeyFormat(t *testing.T) {
 	h := NewHandler(store)
 
 	req := createMultipartRequest(
-		t, "file", "My Voice.m4a", "audio/mp4",
+		t, "file", "My Voice.m4a",
 		[]byte("fake audio data"),
 	)
 	req = req.WithContext(
@@ -205,7 +205,7 @@ func TestUpload_OversizedFile(t *testing.T) {
 
 	content := bytes.Repeat([]byte("x"), 11<<20)
 	req := createMultipartRequest(
-		t, "file", "big.m4a", "audio/mp4", content,
+		t, "file", "big.m4a", content,
 	)
 	req = req.WithContext(
 		middleware.WithUserID(req.Context(), "user-123"),
