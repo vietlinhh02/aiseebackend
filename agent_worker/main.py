@@ -183,6 +183,8 @@ async def entrypoint(ctx):
     # session ready so the agent hears the user's first words.
     audio_buffer: list[rtc.AudioFrame] = []
     buffering = False
+    video_enabled = False
+    restarting = False
 
     async def _start_session():
         nonlocal active_session, first_start, buffering
@@ -200,12 +202,22 @@ async def entrypoint(ctx):
             len(ctx.room.local_participant.track_publications),
         )
 
+        async def _restart_with_video(enabled: bool):
+            nonlocal video_enabled
+            video_enabled = enabled
+            await _restart_session()
+
+        session_ctrl = {
+            'restart_with_video': _restart_with_video,
+        }
+
         agent = AiSeeAgent(
             backend=backend,
             local_participant=ctx.room.local_participant,
             user_context=user_context,
             locale=user_context.get('locale', 'vi'),
             wake_up=wake_up,
+            session_ctrl=session_ctrl,
         )
         active_session = AgentSession(
             llm=google.realtime.RealtimeModel(
@@ -244,7 +256,7 @@ async def entrypoint(ctx):
             agent=agent,
             room=ctx.room,
             room_options=RoomOptions(
-                video_input=True,
+                video_input=video_enabled,
                 audio_input=AudioInputOptions(
                     noise_cancellation=noise_cancellation.BVC(),
                 ),
@@ -274,8 +286,11 @@ async def entrypoint(ctx):
         nonlocal active_session
         if active_session is None:
             return
-        logger.info("idle timeout — closing Gemini session")
-        await _publish_state(local, 'idle')
+        logger.info("closing Gemini session")
+
+        if not restarting:
+            await _publish_state(local, 'idle')
+
         await active_session.aclose()
         active_session = None
 
@@ -290,6 +305,23 @@ async def entrypoint(ctx):
             "Gemini session closed, tracks=%d, idle mode",
             len(local.track_publications),
         )
+
+    async def _restart_session():
+        """Stop and restart session (e.g. after video mode change)."""
+        nonlocal restarting
+        if restarting:
+            logger.info("restart already in progress, skipping")
+            return
+        restarting = True
+        logger.info(
+            "restarting session (video_enabled=%s)",
+            video_enabled,
+        )
+        try:
+            await _stop_session()
+            await _start_session()
+        finally:
+            restarting = False
 
     def _on_speech():
         nonlocal buffering

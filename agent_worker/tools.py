@@ -1,5 +1,6 @@
 """AiSee agent with tool definitions — Phase 1-3."""
 
+import asyncio
 import json
 import logging
 
@@ -20,10 +21,12 @@ class AiSeeAgent(Agent):
         user_context: dict,
         locale: str = 'vi',
         wake_up: bool = False,
+        session_ctrl: dict | None = None,
     ):
         self._backend = backend
         self._lp = local_participant
         self._uctx = user_context
+        self._session_ctrl = session_ctrl or {}
         super().__init__(
             instructions=select_prompt(locale, wake_up, user_context),
         )
@@ -87,9 +90,15 @@ class AiSeeAgent(Agent):
                 method='enable_camera',
                 payload='{}',
             )
-            return json.loads(response)
+            result = json.loads(response)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+        restart = self._session_ctrl.get('restart_with_video')
+        if restart:
+            asyncio.create_task(restart(True))
+
+        return result
 
     @function_tool()
     async def deactivate_camera(self) -> dict:
@@ -100,9 +109,15 @@ class AiSeeAgent(Agent):
                 method='disable_camera',
                 payload='{}',
             )
-            return json.loads(response)
+            result = json.loads(response)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+        restart = self._session_ctrl.get('restart_with_video')
+        if restart:
+            asyncio.create_task(restart(False))
+
+        return result
 
     # --- Phase 2a: Health ---
 
