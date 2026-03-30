@@ -231,7 +231,11 @@ Greeting — at the start of a session:
 """
 
 
-def select_prompt(locale: str, wake_up: bool) -> str:
+def select_prompt(
+    locale: str,
+    wake_up: bool,
+    user_context: dict | None = None,
+) -> str:
     """Select system prompt based on locale and wake_up state."""
     if locale.startswith('vi'):
         base = SYSTEM_PROMPT_VI
@@ -239,4 +243,41 @@ def select_prompt(locale: str, wake_up: bool) -> str:
     else:
         base = SYSTEM_PROMPT_EN
         suffix = WAKEUP_SUFFIX_EN if wake_up else GREETING_SUFFIX_EN
-    return base + suffix
+
+    prompt = base + suffix
+
+    if user_context:
+        prompt += _format_user_context(locale, user_context)
+
+    return prompt
+
+
+def _format_user_context(
+    locale: str, ctx: dict,
+) -> str:
+    """Append user info block so the model knows who it's talking to."""
+    name = ctx.get('user_name', '')
+    access = ctx.get('accessibility', 'low_vision')
+    family = ctx.get('has_family_link', 'false')
+
+    if locale.startswith('vi'):
+        return (
+            "\n=== THÔNG TIN NGƯỜI DÙNG ===\n"
+            f"- Tên: {name}\n"
+            f"- Khả năng thị lực: {access}\n"
+            f"- Đã liên kết người thân: {family}\n\n"
+            "Dùng tên người dùng khi trò chuyện. "
+            "Điều chỉnh mô tả theo khả năng thị lực.\n"
+            "Nếu chưa liên kết người thân, "
+            "không đề xuất gọi người thân hay SOS.\n"
+        )
+    return (
+        "\n=== USER INFO ===\n"
+        f"- Name: {name}\n"
+        f"- Vision level: {access}\n"
+        f"- Family linked: {family}\n\n"
+        "Use the user's name in conversation. "
+        "Adjust descriptions to their vision level.\n"
+        "If no family is linked, "
+        "do not suggest calling family or SOS.\n"
+    )

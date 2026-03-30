@@ -24,7 +24,9 @@ class AiSeeAgent(Agent):
         self._backend = backend
         self._lp = local_participant
         self._uctx = user_context
-        super().__init__(instructions=select_prompt(locale, wake_up))
+        super().__init__(
+            instructions=select_prompt(locale, wake_up, user_context),
+        )
 
     def _uid(self) -> str:
         return self._uctx.get('user_id', '')
