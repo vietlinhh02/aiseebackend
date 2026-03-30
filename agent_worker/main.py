@@ -185,6 +185,7 @@ async def entrypoint(ctx):
     buffering = False
     video_enabled = False
     restarting = False
+    last_resumption_handle: str | None = None
 
     async def _start_session():
         nonlocal active_session, first_start, buffering
@@ -226,6 +227,9 @@ async def entrypoint(ctx):
                 voice="Aoede",
                 thinking_config=gemini_types.ThinkingConfig(
                     thinking_level=gemini_types.ThinkingLevel.LOW,
+                ),
+                session_resumption=gemini_types.SessionResumptionConfig(
+                    handle=last_resumption_handle,
                 ),
                 realtime_input_config=gemini_types.RealtimeInputConfig(
                     automatic_activity_detection=(
@@ -283,10 +287,29 @@ async def entrypoint(ctx):
         audio_buffer.clear()
 
     async def _stop_session():
-        nonlocal active_session
+        nonlocal active_session, last_resumption_handle
         if active_session is None:
             return
         logger.info("closing Gemini session")
+
+        # Capture resumption handle before closing.
+        try:
+            model = active_session.llm
+            if model and hasattr(model, '_sessions'):
+                for sess in model._sessions:
+                    handle = sess.session_resumption_handle
+                    if handle:
+                        last_resumption_handle = handle
+                        logger.info(
+                            "captured session resumption handle:"
+                            " %s…",
+                            handle[:20],
+                        )
+                        break
+        except Exception as exc:
+            logger.warning(
+                "failed to capture resumption handle: %s", exc,
+            )
 
         if not restarting:
             await _publish_state(local, 'idle')
