@@ -89,9 +89,32 @@ func (h *Handler) Upload(
 	}
 	defer file.Close()
 
-	ct := header.Header.Get("Content-Type")
-	if ct == "" || ct == "application/octet-stream" {
-		ct = mime.TypeByExtension(filepath.Ext(header.Filename))
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		response.Err(
+			w, http.StatusBadRequest,
+			"read_error", "Failed to read file",
+		)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		response.Err(
+			w, http.StatusInternalServerError,
+			"seek_error", "Failed to reset file reader",
+		)
+		return
+	}
+
+	sniffed := http.DetectContentType(buf[:n])
+	ct := sniffed
+	if !strings.HasPrefix(sniffed, "image/") {
+		ct = header.Header.Get("Content-Type")
+		if ct == "" || ct == "application/octet-stream" {
+			ct = mime.TypeByExtension(
+				filepath.Ext(header.Filename),
+			)
+		}
 	}
 	if !isAllowedType(ct) {
 		response.Err(

@@ -4,18 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	"github.com/team-dang/aiseebackend/internal/middleware"
 )
 
 type mockStorage struct {
-	url string
-	err error
+	url     string
+	err     error
+	lastKey string
 }
 
 func (m *mockStorage) Upload(
@@ -25,6 +28,7 @@ func (m *mockStorage) Upload(
 	size int64,
 	contentType string,
 ) (string, error) {
+	m.lastKey = key
 	return m.url, m.err
 }
 
@@ -138,5 +142,83 @@ func TestSanitizeFilename(t *testing.T) {
 				tt.input, got, tt.want,
 			)
 		}
+	}
+}
+
+func TestUpload_StorageError(t *testing.T) {
+	store := &mockStorage{err: errors.New("boom")}
+	h := NewHandler(store)
+
+	req := createMultipartRequest(
+		t, "file", "voice.m4a", "audio/mp4",
+		[]byte("fake audio data"),
+	)
+	req = req.WithContext(
+		middleware.WithUserID(req.Context(), "user-123"),
+	)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s",
+			rr.Code, rr.Body.String())
+	}
+}
+
+func TestUpload_KeyFormat(t *testing.T) {
+	store := &mockStorage{
+		url: "http://minio:9000/aisee/test.m4a",
+	}
+	h := NewHandler(store)
+
+	req := createMultipartRequest(
+		t, "file", "My Voice.m4a", "audio/mp4",
+		[]byte("fake audio data"),
+	)
+	req = req.WithContext(
+		middleware.WithUserID(req.Context(), "user-123"),
+	)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s",
+			rr.Code, rr.Body.String())
+	}
+
+	re := regexp.MustCompile(
+		`^uploads/user-123/\d+-my-voice\.m4a$`,
+	)
+	if !re.MatchString(store.lastKey) {
+		t.Errorf(
+			"key %q does not match expected pattern",
+			store.lastKey,
+		)
+	}
+}
+
+func TestUpload_OversizedFile(t *testing.T) {
+	store := &mockStorage{}
+	h := NewHandler(store)
+
+	content := bytes.Repeat([]byte("x"), 11<<20)
+	req := createMultipartRequest(
+		t, "file", "big.m4a", "audio/mp4", content,
+	)
+	req = req.WithContext(
+		middleware.WithUserID(req.Context(), "user-123"),
+	)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusBadRequest &&
+		rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf(
+			"expected 400 or 413, got %d: %s",
+			rr.Code, rr.Body.String(),
+		)
 	}
 }
