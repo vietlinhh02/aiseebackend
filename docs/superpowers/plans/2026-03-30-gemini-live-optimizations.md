@@ -158,11 +158,17 @@ llm=google.realtime.RealtimeModel(
 ),
 ```
 
-- [ ] **Step 3: Verify import resolves**
+- [ ] **Step 3: Verify imports and plugin support**
 
 Run: `cd agent_worker && python -c "from google.genai import types as gemini_types; print(gemini_types.ThinkingLevel.LOW); print(gemini_types.StartSensitivity.START_SENSITIVITY_HIGH); print(gemini_types.EndSensitivity.END_SENSITIVITY_LOW)"`
 
 Expected: Prints three enum values without errors.
+
+Then verify the plugin accepts these params:
+
+Run: `cd agent_worker && python -c "import inspect; from livekit.plugins.google.realtime.realtime_api import RealtimeModel; sig = inspect.signature(RealtimeModel.__init__); print('thinking_config' in sig.parameters, 'realtime_input_config' in sig.parameters)"`
+
+Expected: `True True`. If either is `False`, the installed plugin version doesn't support it — update `livekit-plugins-google` or skip that config.
 
 - [ ] **Step 4: Commit**
 
@@ -189,33 +195,42 @@ In the lazy session state block (after line 183), add:
 
 ```python
 video_enabled = False
+restarting = False
 ```
 
-Add `_restart_session()` function after `_stop_session()`:
+Add `_restart_session()` function after `_stop_session()`. The `restarting` flag guards against concurrent restarts (e.g. rapid camera toggle) and suppresses the "idle" state flash during restart:
 
 ```python
 async def _restart_session():
     """Stop and restart session (e.g. after video mode change)."""
+    nonlocal restarting
+    if restarting:
+        logger.info("restart already in progress, skipping")
+        return
+    restarting = True
     logger.info(
         "restarting session (video_enabled=%s)",
         video_enabled,
     )
-    await _stop_session()
-    await _start_session()
+    try:
+        await _stop_session()
+        await _start_session()
+    finally:
+        restarting = False
 ```
+
+Also modify `_stop_session()` to suppress "idle" state publish during restart — add at the top of `_stop_session()`:
+
+```python
+if not restarting:
+    await _publish_state(local, 'idle')
+```
+
+And remove the existing `await _publish_state(local, 'idle')` line that was there before.
 
 - [ ] **Step 2: Use `video_enabled` in `_start_session()` RoomOptions**
 
-Change `RoomOptions(video_input=True,` to:
-
-```python
-room_options=RoomOptions(
-    video_input=video_enabled,
-    audio_input=AudioInputOptions(
-        noise_cancellation=noise_cancellation.BVC(),
-    ),
-),
-```
+In `main.py:226`, change `video_input=True` to `video_input=video_enabled` inside the existing `RoomOptions(...)` block. Only this one value changes — the rest of `RoomOptions` stays the same.
 
 - [ ] **Step 3: Add `session_ctrl` parameter to AiSeeAgent**
 
@@ -241,9 +256,17 @@ class AiSeeAgent(Agent):
         )
 ```
 
-- [ ] **Step 4: Update `activate_camera` to trigger session restart**
+- [ ] **Step 4: Add `import asyncio` to tools.py**
 
-Replace `activate_camera` in `tools.py`:
+At the top of `agent_worker/tools.py`, add:
+
+```python
+import asyncio
+```
+
+- [ ] **Step 5: Update `activate_camera` to fire-and-forget session restart**
+
+Replace `activate_camera` in `tools.py`. **Critical:** The restart must use `asyncio.create_task()`, not `await`, because `_restart_session()` destroys the current session — if we `await` it, the tool function is killed mid-execution and the result never returns to Gemini.
 
 ```python
 @function_tool()
@@ -263,12 +286,12 @@ async def activate_camera(
 
     restart = self._session_ctrl.get('restart_with_video')
     if restart:
-        await restart(True)
+        asyncio.create_task(restart(True))
 
     return result
 ```
 
-- [ ] **Step 5: Update `deactivate_camera` to trigger session restart**
+- [ ] **Step 6: Update `deactivate_camera` to fire-and-forget session restart**
 
 Replace `deactivate_camera` in `tools.py`:
 
@@ -288,12 +311,12 @@ async def deactivate_camera(self) -> dict:
 
     restart = self._session_ctrl.get('restart_with_video')
     if restart:
-        await restart(False)
+        asyncio.create_task(restart(False))
 
     return result
 ```
 
-- [ ] **Step 6: Create and pass session_ctrl callback in main.py**
+- [ ] **Step 7: Create and pass session_ctrl callback in main.py**
 
 In `_start_session()`, define the callback and pass it to `AiSeeAgent`. Replace the `agent = AiSeeAgent(...)` block:
 
@@ -317,13 +340,13 @@ agent = AiSeeAgent(
 )
 ```
 
-- [ ] **Step 7: Verify syntax**
+- [ ] **Step 8: Verify syntax**
 
 Run: `cd agent_worker && python -c "import main; print('OK')"`
 
 Expected: No import errors.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add agent_worker/main.py agent_worker/tools.py
@@ -338,8 +361,10 @@ session restart with the new video setting via session_ctrl callback."
 
 ### Task 4: Session resumption via native SessionResumptionConfig
 
+**Note:** This task is a spike — Step 1 is investigative. If the handle path from AgentSession is not discoverable within 15 minutes, skip this task. The app works fine without it (sessions start fresh). This task modifies `_stop_session()` and `_start_session()` as already changed by Tasks 2-3.
+
 **Files:**
-- Modify: `agent_worker/main.py` (session lifecycle, RealtimeModel constructor)
+- Modify: `agent_worker/main.py` (session lifecycle as modified by Tasks 2-3, RealtimeModel constructor as modified by Task 2)
 
 - [ ] **Step 1: Investigate how to access session_resumption_handle from AgentSession**
 
