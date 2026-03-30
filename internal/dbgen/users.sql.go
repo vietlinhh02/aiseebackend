@@ -143,9 +143,13 @@ func (q *Queries) DeleteFamilyLink(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getFamilyMembers = `-- name: GetFamilyMembers :many
-SELECT u.id, u.google_id, u.email, u.display_name, u.role, u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token, u.apns_voip_token, u.settings, u.created_at, u.updated_at, u.last_lat, u.last_lng, u.last_location_at FROM users u
-JOIN family_links fl ON fl.family_id = u.id
-WHERE fl.user_id = $1 AND fl.deleted_at IS NULL
+SELECT DISTINCT u.id, u.google_id, u.email, u.display_name, u.role, u.is_volunteer, u.avatar_url, u.fcm_token, u.apns_token, u.apns_voip_token, u.settings, u.created_at, u.updated_at, u.last_lat, u.last_lng, u.last_location_at FROM users u
+JOIN family_links fl ON (
+    (fl.family_id = u.id AND fl.user_id = $1)
+    OR
+    (fl.user_id = u.id AND fl.family_id = $1)
+)
+WHERE fl.deleted_at IS NULL AND u.id != $1
 `
 
 func (q *Queries) GetFamilyMembers(ctx context.Context, userID pgtype.UUID) ([]User, error) {
@@ -494,4 +498,18 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.LastLocationAt,
 	)
 	return i, err
+}
+
+const updateUserRole = `-- name: UpdateUserRole :exec
+UPDATE users SET role = $2, updated_at = now() WHERE id = $1
+`
+
+type UpdateUserRoleParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Role string      `json:"role"`
+}
+
+func (q *Queries) UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) error {
+	_, err := q.db.Exec(ctx, updateUserRole, arg.ID, arg.Role)
+	return err
 }

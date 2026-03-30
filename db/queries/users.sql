@@ -22,9 +22,13 @@ UPDATE users SET fcm_token = $2, updated_at = now() WHERE id = $1;
 UPDATE users SET apns_token = $2, updated_at = now() WHERE id = $1;
 
 -- name: GetFamilyMembers :many
-SELECT u.* FROM users u
-JOIN family_links fl ON fl.family_id = u.id
-WHERE fl.user_id = $1 AND fl.deleted_at IS NULL;
+SELECT DISTINCT u.* FROM users u
+JOIN family_links fl ON (
+    (fl.family_id = u.id AND fl.user_id = $1)
+    OR
+    (fl.user_id = u.id AND fl.family_id = $1)
+)
+WHERE fl.deleted_at IS NULL AND u.id != $1;
 
 -- name: CreateFamilyLink :one
 INSERT INTO family_links (user_id, family_id, relationship, is_primary_contact)
@@ -88,3 +92,7 @@ JOIN family_links fl ON (
 )
 WHERE fl.deleted_at IS NULL AND u.id != $1
 ORDER BY fl.is_primary_contact DESC, fl.created_at ASC;
+
+-- name: UpdateUserRole :exec
+UPDATE users SET role = $2, updated_at = now() WHERE id = $1;
+
