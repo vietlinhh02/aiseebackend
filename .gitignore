@@ -1,3 +1,5 @@
 .env
 *.exe
 /tmp
+/server
+**/__pycache__/
