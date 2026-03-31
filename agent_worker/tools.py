@@ -1,6 +1,5 @@
 """AiSee agent with tool definitions — Phase 1-3."""
 
-import asyncio
 import json
 import logging
 
@@ -21,12 +20,10 @@ class AiSeeAgent(Agent):
         user_context: dict,
         locale: str = 'vi',
         wake_up: bool = False,
-        session_ctrl: dict | None = None,
     ):
         self._backend = backend
         self._lp = local_participant
         self._uctx = user_context
-        self._session_ctrl = session_ctrl or {}
         super().__init__(
             instructions=select_prompt(locale, wake_up, user_context),
         )
@@ -90,15 +87,9 @@ class AiSeeAgent(Agent):
                 method='enable_camera',
                 payload='{}',
             )
-            result = json.loads(response)
+            return json.loads(response)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
-
-        restart = self._session_ctrl.get('restart_with_video')
-        if restart:
-            asyncio.create_task(restart(True))
-
-        return result
 
     @function_tool()
     async def deactivate_camera(self) -> dict:
@@ -109,15 +100,9 @@ class AiSeeAgent(Agent):
                 method='disable_camera',
                 payload='{}',
             )
-            result = json.loads(response)
+            return json.loads(response)
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
-
-        restart = self._session_ctrl.get('restart_with_video')
-        if restart:
-            asyncio.create_task(restart(False))
-
-        return result
 
     # --- Phase 2a: Health ---
 
@@ -288,8 +273,9 @@ class AiSeeAgent(Agent):
     @function_tool()
     async def play_music(self, query: str) -> dict:
         """Tim va phat nhac theo yeu cau."""
-        result = await self._backend.tool_call(
+        result = await self._backend.tool_call_with_timeout(
             "play_music", self._uid(), {"query": query},
+            timeout=20.0,
         )
         play_action = result.pop("play_action", None)
         if play_action and isinstance(play_action, dict):
@@ -309,7 +295,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def control_music(self, action: str) -> dict:
-        """Dieu khien nhac dang phat: pause, resume, stop."""
+        """Dieu khien nhac dang phat: pause, resume, stop, next, previous, volume_up, volume_down."""
         try:
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),

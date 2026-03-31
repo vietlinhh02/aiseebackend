@@ -24,6 +24,11 @@ class BackendClient:
             json={"tool": tool, "user_id": user_id, "params": params},
             headers={"X-Internal-Key": self.api_key},
         )
+        if resp.status_code >= 400:
+            logger.error(
+                "tool_call %s failed: %d %s",
+                tool, resp.status_code, resp.text,
+            )
         resp.raise_for_status()
         return resp.json()
 
@@ -41,6 +46,11 @@ class BackendClient:
             headers={"X-Internal-Key": self.api_key},
             timeout=timeout,
         )
+        if resp.status_code >= 400:
+            logger.error(
+                "tool_call %s failed: %d %s",
+                tool, resp.status_code, resp.text,
+            )
         resp.raise_for_status()
         return resp.json()
 

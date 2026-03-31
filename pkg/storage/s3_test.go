@@ -38,6 +38,20 @@ func TestClient_BuildURL_HTTPS(t *testing.T) {
 	}
 }
 
+func TestClient_BuildURL_PublicEndpointWithScheme(t *testing.T) {
+	c := &Client{
+		bucket:         "aisee",
+		endpoint:       "localhost:9000",
+		publicEndpoint: "https://s3.visme.tech",
+		useSSL:         false,
+	}
+
+	url := c.buildURL("uploads/user123/file.m4a")
+	if url != "https://s3.visme.tech/aisee/uploads/user123/file.m4a" {
+		t.Fatalf("unexpected url: %s", url)
+	}
+}
+
 func TestClient_EnsureBucket_NilClient(t *testing.T) {
 	c := &Client{}
 	err := c.EnsureBucket(context.Background())

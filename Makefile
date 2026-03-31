@@ -2,28 +2,34 @@
 
 # === Development ===
 
-dev: db-up migrate ## Start everything for development
+dev: ## Start dependencies, rebuild agent, run backend with tunnel
+	@$(MAKE) db-up
+	@$(MAKE) migrate
+	@echo "Starting cloudflared tunnel to data.visme.tech..."
+	@cloudflared tunnel --config ~/.cloudflared/aiseedev.yml run aisee-dev &
+	@sleep 3
 	@echo "Starting backend server..."
-	@source .env 2>/dev/null; \
-	DATABASE_URL=$${DATABASE_URL:-postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable} \
-	JWT_SECRET=$${JWT_SECRET:-your-jwt-secret-min-32-chars-long} \
-	INTERNAL_API_KEY=$${INTERNAL_API_KEY:-your-internal-api-key} \
-	LIVEKIT_URL=$${LIVEKIT_URL:-ws://localhost:7880} \
-	LIVEKIT_API_KEY=$${LIVEKIT_API_KEY:-devkey} \
-	LIVEKIT_API_SECRET=$${LIVEKIT_API_SECRET:-devsecret} \
-	PORT=$${PORT:-8080} \
-	go run ./cmd/server/
+	@if [ -f .env ]; then \
+		export $$(grep -v '^#' .env | xargs) && go run ./cmd/server/; \
+	else \
+		echo ".env file not found!"; \
+		exit 1; \
+	fi
 
 stop: ## Stop all Docker services
 	docker compose down
 
 # === Docker ===
 
-db-up: ## Start PostgreSQL, Redis, LiveKit
-	docker compose up -d postgres redis livekit
+db-up: ## Start PostgreSQL, Redis, and Agent worker in Docker (for local go run backend)
+	docker compose up -d postgres redis minio
 	@echo "Waiting for PostgreSQL..."
 	@until docker compose exec -T postgres pg_isready -U aisee > /dev/null 2>&1; do sleep 1; done
 	@echo "PostgreSQL ready."
+	@echo "Building and starting Agent worker..."
+	# Use --no-deps to avoid starting the backend service inside Docker
+	docker compose up -d --build --no-deps agent
+	@echo "Agent worker started."
 
 db-down: ## Stop Docker services
 	docker compose down
@@ -34,10 +40,10 @@ MIGRATE := $(shell command -v migrate 2>/dev/null || echo "$(shell go env GOPATH
 
 migrate: ## Run database migrations
 	@test -f $(MIGRATE) || go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" up
+	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5435/aisee?sslmode=disable" up
 
 migrate-down: ## Rollback all migrations
-	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5432/aisee?sslmode=disable" down -all
+	$(MIGRATE) -path db/migrations -database "postgres://aisee:aisee@localhost:5435/aisee?sslmode=disable" down -all
 
 migrate-create: ## Create new migration (usage: make migrate-create name=add_something)
 	$(MIGRATE) create -ext sql -dir db/migrations -seq $(name)

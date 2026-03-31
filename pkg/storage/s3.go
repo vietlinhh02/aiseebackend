@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 type Client struct {
-	minio    *minio.Client
-	bucket   string
-	endpoint string
-	useSSL   bool
+	minio          *minio.Client
+	bucket         string
+	endpoint       string
+	publicEndpoint string
+	useSSL         bool
 }
 
 type Config struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	UseSSL    bool
+	Endpoint       string
+	PublicEndpoint string
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	UseSSL         bool
 }
 
 func NewClient(cfg Config) (*Client, error) {
@@ -37,10 +40,11 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		minio:    mc,
-		bucket:   cfg.Bucket,
-		endpoint: cfg.Endpoint,
-		useSSL:   cfg.UseSSL,
+		minio:          mc,
+		bucket:         cfg.Bucket,
+		endpoint:       cfg.Endpoint,
+		publicEndpoint: cfg.PublicEndpoint,
+		useSSL:         cfg.UseSSL,
 	}, nil
 }
 
@@ -97,11 +101,25 @@ func (c *Client) Upload(
 }
 
 func (c *Client) buildURL(key string) string {
+	if strings.Contains(c.publicEndpoint, "://") {
+		return fmt.Sprintf(
+			"%s/%s/%s",
+			strings.TrimRight(c.publicEndpoint, "/"),
+			c.bucket,
+			key,
+		)
+	}
+
+	endpoint := c.endpoint
+	if c.publicEndpoint != "" {
+		endpoint = c.publicEndpoint
+	}
+
 	scheme := "http"
 	if c.useSSL {
 		scheme = "https"
 	}
 	return fmt.Sprintf(
-		"%s://%s/%s/%s", scheme, c.endpoint, c.bucket, key,
+		"%s://%s/%s/%s", scheme, endpoint, c.bucket, key,
 	)
 }

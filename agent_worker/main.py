@@ -1,11 +1,9 @@
 import asyncio
-import collections
 import logging
 import time
 
 from livekit import rtc
 from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
-from livekit.agents.voice.io import AudioInput
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import google, noise_cancellation, silero
 
@@ -17,36 +15,6 @@ from tools import AiSeeAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aisee-agent")
-
-# Max seconds of audio to buffer during session startup.
-AUDIO_BUFFER_MAX_S = 5.0
-
-
-class BufferedAudioInput(AudioInput):
-    """Yield buffered frames first, then delegate to the room's audio."""
-
-    def __init__(
-        self,
-        buffered: list[rtc.AudioFrame],
-        source: AudioInput,
-    ):
-        super().__init__(label="buffered-audio", source=source)
-        self._buffered = collections.deque(buffered)
-        self._done_buffered = False
-        logger.info(
-            "BufferedAudioInput: replaying %d buffered frames "
-            "before live audio",
-            len(buffered),
-        )
-
-    async def __anext__(self) -> rtc.AudioFrame:
-        if not self._done_buffered:
-            if self._buffered:
-                return self._buffered.popleft()
-            self._done_buffered = True
-            logger.info("BufferedAudioInput: buffered frames done, "
-                        "switching to live audio")
-        return await super().__anext__()
 
 
 async def _publish_state(local_participant, state: str):
@@ -174,21 +142,14 @@ async def entrypoint(ctx):
                 "updated user_identity=%s", participant.identity,
             )
 
-    # ── Lazy session state ──────────────────────────────────
+    # ── Session state ─────────────────────────────────────
     active_session: AgentSession | None = None
     first_start = True
     vad_instance = ctx.proc.userdata["vad"]
-
-    # Audio buffer: collects frames between START_OF_SPEECH and
-    # session ready so the agent hears the user's first words.
-    audio_buffer: list[rtc.AudioFrame] = []
-    buffering = False
-    video_enabled = False
-    restarting = False
     last_resumption_handle: str | None = None
 
     async def _start_session():
-        nonlocal active_session, first_start, buffering
+        nonlocal active_session, first_start
         if active_session is not None:
             return
 
@@ -203,22 +164,12 @@ async def entrypoint(ctx):
             len(ctx.room.local_participant.track_publications),
         )
 
-        async def _restart_with_video(enabled: bool):
-            nonlocal video_enabled
-            video_enabled = enabled
-            await _restart_session()
-
-        session_ctrl = {
-            'restart_with_video': _restart_with_video,
-        }
-
         agent = AiSeeAgent(
             backend=backend,
             local_participant=ctx.room.local_participant,
             user_context=user_context,
             locale=user_context.get('locale', 'vi'),
             wake_up=wake_up,
-            session_ctrl=session_ctrl,
         )
         active_session = AgentSession(
             llm=google.realtime.RealtimeModel(
@@ -260,31 +211,17 @@ async def entrypoint(ctx):
             agent=agent,
             room=ctx.room,
             room_options=RoomOptions(
-                video_input=video_enabled,
+                video_input=True,
                 audio_input=AudioInputOptions(
                     noise_cancellation=noise_cancellation.BVC(),
                 ),
             ),
         )
 
-        # Stop buffering — session is now receiving live audio.
-        buffering = False
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
-            "Gemini session ready in %.0fms, "
-            "buffered %d audio frames",
-            elapsed_ms, len(audio_buffer),
+            "Gemini session ready in %.0fms", elapsed_ms,
         )
-
-        # Swap the session's audio input with a wrapper that
-        # replays buffered frames before live audio.
-        if audio_buffer and active_session.input.audio:
-            original_audio = active_session.input.audio
-            active_session.input.audio = BufferedAudioInput(
-                buffered=list(audio_buffer),
-                source=original_audio,
-            )
-        audio_buffer.clear()
 
     async def _stop_session():
         nonlocal active_session, last_resumption_handle
@@ -311,9 +248,7 @@ async def entrypoint(ctx):
                 "failed to capture resumption handle: %s", exc,
             )
 
-        if not restarting:
-            await _publish_state(local, 'idle')
-
+        await _publish_state(local, 'idle')
         await active_session.aclose()
         active_session = None
 
@@ -329,30 +264,9 @@ async def entrypoint(ctx):
             len(local.track_publications),
         )
 
-    async def _restart_session():
-        """Stop and restart session (e.g. after video mode change)."""
-        nonlocal restarting
-        if restarting:
-            logger.info("restart already in progress, skipping")
-            return
-        restarting = True
-        logger.info(
-            "restarting session (video_enabled=%s)",
-            video_enabled,
-        )
-        try:
-            await _stop_session()
-            await _start_session()
-        finally:
-            restarting = False
-
     def _on_speech():
-        nonlocal buffering
         if active_session is None:
-            buffering = True
-            audio_buffer.clear()
-            logger.info("speech detected — buffering audio, "
-                        "starting session")
+            logger.info("speech detected — starting session")
             asyncio.create_task(_start_session())
 
     # ── Silero VAD on user audio track ──────────────────────
@@ -362,9 +276,6 @@ async def entrypoint(ctx):
 
         async def _push_frames():
             async for event in audio_stream:
-                # Buffer frames while session is starting up.
-                if buffering:
-                    audio_buffer.append(event.frame)
                 vad_stream.push_frame(event.frame)
             vad_stream.end_input()
 
@@ -388,6 +299,9 @@ async def entrypoint(ctx):
             track = pub.track
             if track and track.kind == rtc.TrackKind.KIND_AUDIO:
                 asyncio.create_task(_start_vad(track))
+
+    # ── Auto-start session so the AI greets immediately ───
+    await _start_session()
 
     # ── Keep entrypoint alive until room disconnects ────────
     disconnect_event = asyncio.Event()
