@@ -6,20 +6,26 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 )
 
 type Service struct {
 	db        *pgxpool.Pool
 	queries   *dbgen.Queries
+	rdb       *redis.Client
 	jwtSecret string
 }
 
-func NewService(db *pgxpool.Pool, jwtSecret string) *Service {
+func NewService(
+	db *pgxpool.Pool, rdb *redis.Client, jwtSecret string,
+) *Service {
 	return &Service{
 		db:        db,
 		queries:   dbgen.New(db),
+		rdb:       rdb,
 		jwtSecret: jwtSecret,
 	}
 }
@@ -47,7 +53,19 @@ func (s *Service) AuthenticateGoogle(ctx context.Context, idToken, role string) 
 		if err != nil {
 			return nil, err
 		}
+	} else if role != "" && user.Role != role {
+		err = s.queries.UpdateUserRole(ctx, dbgen.UpdateUserRoleParams{
+			ID:   user.ID,
+			Role: role,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to update user role: %w", err)
+		}
+		user.Role = role
 	}
+
+	// Cache user status for middleware fast-path
+	s.cacheUserStatus(ctx, user.ID.String(), user.Role)
 
 	return s.generateTokenPair(user.ID.String(), user.Role)
 }
@@ -70,17 +88,39 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 		return nil, fmt.Errorf("not a refresh token")
 	}
 
+	// Check if refresh token is blacklisted (rotation)
+	jti, _ := claims["jti"].(string)
+	if s.rdb.Get(ctx, "revoked:"+jti).Val() != "" {
+		return nil, fmt.Errorf("token revoked")
+	}
+
 	sub, _ := claims["sub"].(string)
 	role, _ := claims["role"].(string)
+
+	// Invalidate the old refresh token (rotation)
+	if exp, ok := claims["exp"].(float64); ok {
+		ttl := time.Unix(int64(exp), 0).Sub(time.Now())
+		if ttl > 0 {
+			s.rdb.Set(ctx, "revoked:"+jti, "1", ttl)
+		}
+	}
+
 	return s.generateTokenPair(sub, role)
 }
 
+func (s *Service) cacheUserStatus(ctx context.Context, userID, role string) {
+	// Cache for 1 hour, matches access token duration
+	s.rdb.Set(ctx, "user:status:"+userID, role, time.Hour)
+}
+
 func (s *Service) generateTokenPair(userID, role string) (*TokenPair, error) {
+	jti := uuid.New().String()
 	accessExp := time.Now().Add(time.Hour)
 	access := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  userID,
 		"role": role,
 		"type": "access",
+		"jti":  jti,
 		"exp":  accessExp.Unix(),
 	})
 	accessStr, err := access.SignedString([]byte(s.jwtSecret))
@@ -88,10 +128,12 @@ func (s *Service) generateTokenPair(userID, role string) (*TokenPair, error) {
 		return nil, err
 	}
 
+	refreshJti := uuid.New().String()
 	refresh := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  userID,
 		"role": role,
 		"type": "refresh",
+		"jti":  refreshJti,
 		"exp":  time.Now().Add(30 * 24 * time.Hour).Unix(),
 	})
 	refreshStr, err := refresh.SignedString([]byte(s.jwtSecret))

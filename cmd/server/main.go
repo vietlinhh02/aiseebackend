@@ -82,11 +82,12 @@ func main() {
 
 	// S3 / MinIO storage
 	storageClient, err := storage.NewClient(storage.Config{
-		Endpoint:  os.Getenv("S3_ENDPOINT"),
-		AccessKey: os.Getenv("S3_ACCESS_KEY"),
-		SecretKey: os.Getenv("S3_SECRET_KEY"),
-		Bucket:    os.Getenv("S3_BUCKET"),
-		UseSSL:    os.Getenv("S3_USE_SSL") == "true",
+		Endpoint:       os.Getenv("S3_ENDPOINT"),
+		PublicEndpoint: os.Getenv("S3_PUBLIC_ENDPOINT"),
+		AccessKey:      os.Getenv("S3_ACCESS_KEY"),
+		SecretKey:      os.Getenv("S3_SECRET_KEY"),
+		Bucket:         os.Getenv("S3_BUCKET"),
+		UseSSL:         os.Getenv("S3_USE_SSL") == "true",
 	})
 	if err != nil {
 		slog.Error("storage client init failed", "error", err)
@@ -105,7 +106,7 @@ func main() {
 
 	// Services
 	queries := dbgen.New(pool)
-	authService := auth.NewService(pool, jwtSecret)
+	authService := auth.NewService(pool, rdb, jwtSecret)
 	authHandler := auth.NewHandler(authService)
 
 	userService := user.NewService(pool)
@@ -117,10 +118,10 @@ func main() {
 		os.Getenv("LIVEKIT_API_SECRET"),
 	)
 
-	callService := call.NewService(lkClient, pusher)
+	chatHub := chat.NewHub()
+	callService := call.NewService(lkClient, pusher, chatHub)
 	callHandler := call.NewHandler(callService, userService)
 
-	chatHub := chat.NewHub()
 	chatService := chat.NewService(pool, chatHub, pusher)
 	chatHandler := chat.NewHandler(
 		chatService, chatHub, userService, jwtSecret,
@@ -156,6 +157,7 @@ func main() {
 	// Dashboard
 	dashService := dashboard.NewService(queries)
 	dashHandler := dashboard.NewHandler(dashService, userService)
+	meHandler := dashboard.NewMeHandler(dashService)
 
 	// Volunteer
 	volService := volunteer.NewService(
@@ -197,7 +199,7 @@ func main() {
 		r.Post("/auth/refresh", authHandler.Refresh)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(jwtSecret))
+			r.Use(middleware.Auth(jwtSecret, rdb))
 
 			// Users
 			r.Get("/users/me", userHandler.GetMe)
@@ -221,6 +223,13 @@ func main() {
 			// Upload
 			r.Post("/upload", uploadHandler.Upload)
 
+			// My health (user's own data)
+			r.Route("/me", func(r chi.Router) {
+				r.Get("/medications", meHandler.Medications)
+				r.Get("/appointments", meHandler.Appointments)
+				r.Get("/health", meHandler.Health)
+			})
+
 			// Dashboard (family)
 			r.Route("/dashboard/{user_id}", func(r chi.Router) {
 				r.Get("/health", dashHandler.Health)
@@ -234,6 +243,7 @@ func main() {
 
 			// Volunteers
 			r.Route("/volunteers", func(r chi.Router) {
+				r.Get("/status", volHandler.GetStatus)
 				r.Post("/register", volHandler.Register)
 				r.Put("/availability", volHandler.SetAvailability)
 				r.Post("/match", volHandler.StartMatch)

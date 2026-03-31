@@ -57,6 +57,29 @@ func (h *Handler) Register(
 	)
 }
 
+// GetStatus handles GET /api/v1/volunteers/status.
+func (h *Handler) GetStatus(
+	w http.ResponseWriter, r *http.Request,
+) {
+	userID := middleware.UserIDFromContext(r.Context())
+
+	vol, isRegistered, err := h.svc.GetRegistrationStatus(
+		r.Context(), userID,
+	)
+	if err != nil {
+		response.Err(
+			w, http.StatusInternalServerError,
+			"status_failed", err.Error(),
+		)
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]any{
+		"is_registered": isRegistered,
+		"volunteer":     vol,
+	})
+}
+
 // SetAvailability handles
 // PUT /api/v1/volunteers/availability.
 func (h *Handler) SetAvailability(

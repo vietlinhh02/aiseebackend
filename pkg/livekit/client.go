@@ -3,6 +3,8 @@ package livekit
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/livekit/protocol/auth"
@@ -16,6 +18,8 @@ type Client struct {
 	host      string
 	roomSvc   *lksdk.RoomServiceClient
 	dispSvc   *lksdk.AgentDispatchClient
+	
+	dispatches sync.Map
 }
 
 func NewClient(host, apiKey, apiSecret string) *Client {
@@ -108,12 +112,27 @@ func (c *Client) DispatchClient() *lksdk.AgentDispatchClient {
 func (c *Client) CreateRoomWithAgent(
 	ctx context.Context, roomName string,
 ) error {
-	// Delete stale room to prevent dispatch accumulation.
-	// CreateDispatch is not idempotent — calling it on an existing
-	// room adds another dispatch, spawning a duplicate agent.
-	_ = c.DeleteRoom(ctx, roomName)
+	// 1. Debounce rapid retries (e.g., within 15 seconds) to prevent duplicate agent spawn while Booting
+	if lastInter, ok := c.dispatches.Load(roomName); ok {
+		if time.Since(lastInter.(time.Time)) < 15*time.Second {
+			return nil // Recently dispatched, agent is likely booting
+		}
+	}
 
-	_, err := c.RoomClient().CreateRoom(
+	// 2. Check if agent is already actively participating in the room
+	participants, err := c.ListParticipants(ctx, roomName)
+	if err == nil {
+		for _, p := range participants {
+			// Aisee agent connects with this specific name
+			if p.Name == "aisee-agent" || strings.HasPrefix(p.Identity, "agent") {
+				c.dispatches.Store(roomName, time.Now()) // Agent is here, update debounce
+				return nil
+			}
+		}
+	}
+
+	// 3. Create room (updates settings if room already exists)
+	_, err = c.RoomClient().CreateRoom(
 		ctx, &lkproto.CreateRoomRequest{
 			Name:             roomName,
 			EmptyTimeout:     300,
@@ -124,13 +143,16 @@ func (c *Client) CreateRoomWithAgent(
 		return fmt.Errorf("create room %s: %w", roomName, err)
 	}
 
+	// 4. Dispatch the new agent
 	_, err = c.DispatchClient().CreateDispatch(
 		ctx, &lkproto.CreateAgentDispatchRequest{
 			AgentName: "aisee-agent",
 			Room:      roomName,
 		},
 	)
-	if err != nil {
+	if err == nil {
+		c.dispatches.Store(roomName, time.Now())
+	} else {
 		return fmt.Errorf("dispatch agent to %s: %w", roomName, err)
 	}
 

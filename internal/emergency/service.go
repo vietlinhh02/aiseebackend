@@ -109,6 +109,9 @@ func (s *Service) Alert(
 
 	notified := 0
 	for _, m := range members {
+		calleeToken, _ := s.lk.CreateToken(
+			roomName, pgutil.PgUUIDToString(m.ID), m.DisplayName,
+		)
 		s.pusher.Send(ctx, push.UserTokens{
 			FcmToken:      m.FcmToken,
 			ApnsToken:     m.ApnsToken,
@@ -118,11 +121,13 @@ func (s *Service) Alert(
 			Body:  "Can giup do khan cap!",
 			Type:  "voip",
 			Data: map[string]string{
-				"type":      "emergency",
-				"room_name": roomName,
-				"user_id":   userID,
-				"lat":       fmt.Sprintf("%.6f", lat),
-				"lng":       fmt.Sprintf("%.6f", lng),
+				"type":        "emergency",
+				"room_name":   roomName,
+				"user_id":     userID,
+				"caller_name": user.DisplayName,
+				"token":       calleeToken,
+				"lat":         fmt.Sprintf("%.6f", lat),
+				"lng":         fmt.Sprintf("%.6f", lng),
 			},
 		})
 		notified++
@@ -203,6 +208,10 @@ func (s *Service) Escalate(
 		)
 	}
 
+	calleeToken, _ := s.lk.CreateToken(
+		roomName, pgutil.PgUUIDToString(target.ID), target.DisplayName,
+	)
+
 	s.pusher.Send(ctx, push.UserTokens{
 		FcmToken:      target.FcmToken,
 		ApnsToken:     target.ApnsToken,
@@ -212,9 +221,11 @@ func (s *Service) Escalate(
 		Body:  "Can giup do khan cap!",
 		Type:  "voip",
 		Data: map[string]string{
-			"type":      "escalation",
-			"room_name": roomName,
-			"user_id":   userID,
+			"type":        "escalation",
+			"room_name":   roomName,
+			"user_id":     userID,
+			"caller_name": caller.DisplayName,
+			"token":       calleeToken,
 		},
 	})
 

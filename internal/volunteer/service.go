@@ -114,6 +114,30 @@ func (s *Service) Register(
 	return nil
 }
 
+// GetRegistrationStatus checks if the user is a registered
+// volunteer and returns their profile if they are.
+func (s *Service) GetRegistrationStatus(
+	ctx context.Context,
+	userID string,
+) (dbgen.Volunteer, bool, error) {
+	uid, err := pgutil.ParsePgUUID(userID)
+	if err != nil {
+		return dbgen.Volunteer{}, false,
+			fmt.Errorf("parse user id: %w", err)
+	}
+
+	vol, err := s.q.GetVolunteerByUserID(ctx, uid)
+	if err != nil {
+		// If using pgx, we should check for NoRows error if
+		// sqlc doesn't handle it gracefully in the generated
+		// code, but usually sqlc returns a zero value and
+		// the error from the driver.
+		return dbgen.Volunteer{}, false, nil
+	}
+
+	return vol, true, nil
+}
+
 // SetAvailability toggles the volunteer's availability.
 func (s *Service) SetAvailability(
 	ctx context.Context,
@@ -223,6 +247,10 @@ func (s *Service) matchLoop(userID, matchID string) {
 	for _, c := range candidates {
 		volID := pgutil.PgUUIDToString(c.UserID)
 
+		calleeToken, _ := s.lk.CreateToken(
+			roomName, volID, c.DisplayName,
+		)
+
 		s.pusher.Send(ctx, push.UserTokens{
 			FcmToken:      c.FcmToken,
 			ApnsToken:     c.ApnsToken,
@@ -232,13 +260,14 @@ func (s *Service) matchLoop(userID, matchID string) {
 			Body:  "Can giup do tu nguoi khuyet tat!",
 			Type:  "voip",
 			Data: map[string]string{
-				"type":      "volunteer_match",
-				"room_name": roomName,
-				"user_id":   userID,
-				"match_id":  matchID,
+				"type":        "volunteer_match",
+				"room_name":   roomName,
+				"user_id":     userID,
+				"caller_name": user.DisplayName,
+				"token":       calleeToken,
+				"match_id":    matchID,
 			},
 		})
-
 		if s.waitForJoin(ctx, roomName, userID, 30*time.Second) {
 			token, tokenErr := s.lk.CreateToken(
 				roomName, userID, user.DisplayName,

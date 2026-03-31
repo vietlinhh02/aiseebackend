@@ -27,7 +27,7 @@ func (h *Handler) GetToken(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
-	token, err := h.service.GetUserToken(userID, "User")
+	token, err := h.service.GetUserToken(r.Context(), userID, "User")
 	if err != nil {
 		response.Err(
 			w, http.StatusInternalServerError,

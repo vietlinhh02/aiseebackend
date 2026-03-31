@@ -173,6 +173,7 @@ func (h *Handler) handleMakeCall(
 	return map[string]string{
 		"status":      "room_created",
 		"room_name":   result.RoomName,
+		"token":       result.Token,
 		"callee_name": member.User.DisplayName,
 	}, nil
 }

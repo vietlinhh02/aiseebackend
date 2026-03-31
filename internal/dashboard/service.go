@@ -33,6 +33,9 @@ type Querier interface {
 	GetUserLocation(
 		ctx context.Context, uid pgtype.UUID,
 	) (dbgen.GetUserLocationRow, error)
+	GetAppointmentsByUser(
+		ctx context.Context, uid pgtype.UUID,
+	) ([]dbgen.Appointment, error)
 	CreateMedication(
 		ctx context.Context, p dbgen.CreateMedicationParams,
 	) (dbgen.Medication, error)
@@ -209,6 +212,18 @@ func (s *Service) Medications(
 	}
 
 	return MedicationsResponse{Medications: result, Count: len(result)}, nil
+}
+
+// Appointments returns upcoming appointments for a user.
+func (s *Service) Appointments(
+	ctx context.Context, userID string,
+) ([]dbgen.Appointment, error) {
+	uid, err := pgutil.ParsePgUUID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.q.GetAppointmentsByUser(ctx, uid)
 }
 
 // AuditLog returns paginated audit logs for a user.
