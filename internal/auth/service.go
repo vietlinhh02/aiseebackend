@@ -90,7 +90,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 
 	// Check if refresh token is blacklisted (rotation)
 	jti, _ := claims["jti"].(string)
-	if s.rdb.Get(ctx, "revoked:"+jti).Val() != "" {
+	if s.rdb != nil && s.rdb.Get(ctx, "revoked:"+jti).Val() != "" {
 		return nil, fmt.Errorf("token revoked")
 	}
 
@@ -100,7 +100,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	// Invalidate the old refresh token (rotation)
 	if exp, ok := claims["exp"].(float64); ok {
 		ttl := time.Unix(int64(exp), 0).Sub(time.Now())
-		if ttl > 0 {
+		if ttl > 0 && s.rdb != nil {
 			s.rdb.Set(ctx, "revoked:"+jti, "1", ttl)
 		}
 	}
@@ -109,6 +109,10 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 }
 
 func (s *Service) cacheUserStatus(ctx context.Context, userID, role string) {
+	if s.rdb == nil {
+		return
+	}
+
 	// Cache for 1 hour, matches access token duration
 	s.rdb.Set(ctx, "user:status:"+userID, role, time.Hour)
 }

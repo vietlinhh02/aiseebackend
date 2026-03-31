@@ -14,6 +14,7 @@ type stubQueries struct {
 	symptoms []dbgen.HealthSymptom
 	metrics  []dbgen.HealthMetric
 	audits   []dbgen.AuditLog
+	apts     []dbgen.Appointment
 	location dbgen.GetUserLocationRow
 }
 
@@ -51,6 +52,12 @@ func (s *stubQueries) GetUserLocation(
 	_ context.Context, _ pgtype.UUID,
 ) (dbgen.GetUserLocationRow, error) {
 	return s.location, nil
+}
+
+func (s *stubQueries) GetAppointmentsByUser(
+	_ context.Context, _ pgtype.UUID,
+) ([]dbgen.Appointment, error) {
+	return s.apts, nil
 }
 
 func (s *stubQueries) CreateMedication(

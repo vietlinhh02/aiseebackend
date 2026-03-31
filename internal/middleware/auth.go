@@ -57,10 +57,12 @@ func Auth(secret string, rdb *redis.Client) func(http.Handler) http.Handler {
 			// Fast-path: check if user is deactivated or role changed via Redis
 			// If key doesn't exist, we allow for now (it will be re-cached on next login/refresh)
 			// For stricter security, we could look up the DB if not in Redis.
-			cachedRole, err := rdb.Get(r.Context(), "user:status:"+sub).Result()
-			if err == nil && cachedRole != role {
-				response.Err(w, http.StatusUnauthorized, "role_changed", "User role has changed or account deactivated")
-				return
+			if rdb != nil {
+				cachedRole, err := rdb.Get(r.Context(), "user:status:"+sub).Result()
+				if err == nil && cachedRole != role {
+					response.Err(w, http.StatusUnauthorized, "role_changed", "User role has changed or account deactivated")
+					return
+				}
 			}
 
 			ctx := context.WithValue(r.Context(), userIDKey, sub)
