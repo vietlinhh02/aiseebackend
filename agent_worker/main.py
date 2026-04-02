@@ -197,7 +197,7 @@ async def entrypoint(ctx):
                     ),
                 ),
             ),
-            user_away_timeout=0,
+            user_away_timeout=3600,
         )
 
         await active_session.start(
