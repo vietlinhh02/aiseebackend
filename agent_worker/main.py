@@ -144,17 +144,15 @@ async def entrypoint(ctx):
 
     # ── Session state ─────────────────────────────────────
     active_session: AgentSession | None = None
-    first_start = True
     vad_instance = ctx.proc.userdata["vad"]
     last_resumption_handle: str | None = None
 
     async def _start_session():
-        nonlocal active_session, first_start
+        nonlocal active_session
         if active_session is not None:
             return
 
-        wake_up = not first_start
-        first_start = False
+        wake_up = True
         t0 = time.monotonic()
 
         logger.info(
@@ -199,13 +197,8 @@ async def entrypoint(ctx):
                     ),
                 ),
             ),
-            user_away_timeout=30,
+            user_away_timeout=0,
         )
-
-        @active_session.on("user_state_changed")
-        def _on_user_state(ev):
-            if ev.new_state == "away":
-                asyncio.create_task(_stop_session())
 
         await active_session.start(
             agent=agent,
