@@ -3,9 +3,9 @@ import logging
 import time
 
 from livekit import rtc
-from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
+from livekit.agents import AgentSession, WorkerOptions, cli
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
-from livekit.plugins import google, noise_cancellation, silero
+from livekit.plugins import google, noise_cancellation
 
 from google.genai import types as gemini_types
 
@@ -144,7 +144,6 @@ async def entrypoint(ctx):
 
     # ── Session state ─────────────────────────────────────
     active_session: AgentSession | None = None
-    vad_instance = ctx.proc.userdata["vad"]
     last_resumption_handle: str | None = None
 
     async def _start_session():
@@ -257,41 +256,12 @@ async def entrypoint(ctx):
             len(local.track_publications),
         )
 
-    def _on_speech():
-        if active_session is None:
-            logger.info("speech detected — starting session")
-            asyncio.create_task(_start_session())
-
-    # ── Silero VAD on user audio track ──────────────────────
-    async def _start_vad(track: rtc.Track):
-        audio_stream = rtc.AudioStream(track)
-        vad_stream = vad_instance.stream()
-
-        async def _push_frames():
-            async for event in audio_stream:
-                vad_stream.push_frame(event.frame)
-            vad_stream.end_input()
-
-        asyncio.create_task(_push_frames())
-
-        async for event in vad_stream:
-            if event.type == vad_mod.VADEventType.START_OF_SPEECH:
-                _on_speech()
-
     @ctx.room.on("track_subscribed")
     def on_track(track, publication, participant):
         logger.info(
             "track_subscribed: kind=%s participant=%s",
             track.kind, participant.identity,
         )
-        if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(_start_vad(track))
-
-    for participant in ctx.room.remote_participants.values():
-        for pub in participant.track_publications.values():
-            track = pub.track
-            if track and track.kind == rtc.TrackKind.KIND_AUDIO:
-                asyncio.create_task(_start_vad(track))
 
     # ── Auto-start session so the AI greets immediately ───
     await _start_session()
@@ -315,15 +285,10 @@ async def entrypoint(ctx):
     logger.info("entrypoint exiting")
 
 
-def prewarm(proc):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
 if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name="aisee-agent",
-            prewarm_fnc=prewarm,
         ),
     )
