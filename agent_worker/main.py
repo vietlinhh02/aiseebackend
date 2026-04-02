@@ -3,9 +3,9 @@ import logging
 import time
 
 from livekit import rtc
-from livekit.agents import AgentSession, WorkerOptions, cli
+from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
-from livekit.plugins import google, noise_cancellation
+from livekit.plugins import google, noise_cancellation, silero
 
 from google.genai import types as gemini_types
 
@@ -144,14 +144,17 @@ async def entrypoint(ctx):
 
     # ── Session state ─────────────────────────────────────
     active_session: AgentSession | None = None
+    first_start = True
+    vad_instance = ctx.proc.userdata["vad"]
     last_resumption_handle: str | None = None
 
     async def _start_session():
-        nonlocal active_session
+        nonlocal active_session, first_start
         if active_session is not None:
             return
 
-        wake_up = True
+        wake_up = not first_start
+        first_start = False
         t0 = time.monotonic()
 
         logger.info(
@@ -196,8 +199,14 @@ async def entrypoint(ctx):
                     ),
                 ),
             ),
-            user_away_timeout=3600,
+            user_away_timeout=30,
         )
+
+        @active_session.on("user_state_changed")
+        def _on_user_state(ev):
+            if ev.new_state == "away":
+                logger.info("user away — closing session (will resume on speech)")
+                asyncio.create_task(_stop_session())
 
         await active_session.start(
             agent=agent,
@@ -256,14 +265,43 @@ async def entrypoint(ctx):
             len(local.track_publications),
         )
 
+    def _on_speech():
+        if active_session is None:
+            logger.info("speech detected — resuming session")
+            asyncio.create_task(_start_session())
+
+    # ── Lightweight VAD: only detect speech start to resume ──
+    async def _run_vad(track: rtc.Track):
+        audio_stream = rtc.AudioStream(track)
+        vad_stream = vad_instance.stream()
+
+        async def _push_frames():
+            async for event in audio_stream:
+                vad_stream.push_frame(event.frame)
+            vad_stream.end_input()
+
+        asyncio.create_task(_push_frames())
+
+        async for event in vad_stream:
+            if event.type == vad_mod.VADEventType.START_OF_SPEECH:
+                _on_speech()
+
     @ctx.room.on("track_subscribed")
     def on_track(track, publication, participant):
         logger.info(
             "track_subscribed: kind=%s participant=%s",
             track.kind, participant.identity,
         )
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
+            asyncio.create_task(_run_vad(track))
 
-    # ── Auto-start session so the AI greets immediately ───
+    for participant in ctx.room.remote_participants.values():
+        for pub in participant.track_publications.values():
+            track = pub.track
+            if track and track.kind == rtc.TrackKind.KIND_AUDIO:
+                asyncio.create_task(_run_vad(track))
+
+    # ── Auto-start first session (no greeting) ───────────
     await _start_session()
 
     # ── Keep entrypoint alive until room disconnects ────────
@@ -285,10 +323,15 @@ async def entrypoint(ctx):
     logger.info("entrypoint exiting")
 
 
+def prewarm(proc):
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name="aisee-agent",
+            prewarm_fnc=prewarm,
         ),
     )
