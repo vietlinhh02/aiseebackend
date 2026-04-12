@@ -1,0 +1,49 @@
+# Mẫu cho pipeline livekit-wakeword — KHÔNG chạy trong repo AiSee.
+# Sao chép sang máy có GPU/CLI: https://github.com/livekit/livekit-wakeword
+#
+#   uv tool install 'livekit-wakeword[train,eval,export]'
+#   livekit-wakeword setup
+#   livekit-wakeword run configs/aisee_wake.yaml
+#
+# Đổi target_phrases sang cụm tiếng Việt bạn muốn; chỉnh n_samples/steps cho production.
+
+model_name: aisee_wake
+
+target_phrases:
+  - "ơi aisee"
+
+n_samples: 2000
+n_samples_val: 400
+n_background_samples: 800
+n_background_samples_val: 160
+tts_batch_size: 20
+
+custom_negative_phrases:
+  - "aisee"
+  - "ai xì"
+  - "hey aisee"
+
+data_dir: ./data
+output_dir: ./output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 8
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+model:
+  model_type: conv_attention
+  model_size: small
+
+steps: 8000
+learning_rate: 0.001
+max_negative_weight: 1000
+target_fp_per_hour: 0.2
+
+batch_n_per_class:
+  positive: 16
+  adversarial_negative: 16
+  ACAV100M_sample: 64
+  background_noise: 16

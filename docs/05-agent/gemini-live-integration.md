@@ -167,3 +167,7 @@ Gemini tu tra lỗi truc tiep (không goi tool nào) khi:
 | Gemini tu choi tra lỗi (safety filter) | Agent noi: "Toi không thể tra lỗi cau hoi này." |
 | Tool call thất bại | Agent noi: "Toi không thực hiện được. Ban thử lại sau nhe." Ghi audit log. |
 | Video frame send thất bại | Tat camera, quay lai audio-only. Thong bao user. |
+
+## Wake word và pattern LiveKit
+
+Xem [wake-word-livekit-pattern.md](./wake-word-livekit-pattern.md): so sánh với hello-wakeword, room cố định vs room tạm, và pipeline huấn luyện ONNX tùy chọn.
