@@ -1,9 +1,11 @@
 import asyncio
+import json
 import logging
 import time
 
 from livekit import rtc
 from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
+from livekit.rtc.rpc import RpcInvocationData
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import google, noise_cancellation, silero
 
@@ -45,8 +47,8 @@ async def entrypoint(ctx):
             p.identity, sid, p.kind,
         )
 
-    # Wait briefly so concurrent agents can see each other.
-    await asyncio.sleep(1)
+    # Chờ ngắn để agent thứ hai (nếu có) kịp hiện trong room trước khi thoát.
+    await asyncio.sleep(0.35)
 
     # Exit if another agent is already in the room.
     for p in ctx.room.remote_participants.values():
@@ -269,6 +271,15 @@ async def entrypoint(ctx):
         if active_session is None:
             logger.info("speech detected — resuming session")
             asyncio.create_task(_start_session())
+
+    @local.register_rpc_method("wake_conversation_ready")
+    async def _wake_conversation_ready(data: RpcInvocationData) -> str:
+        logger.info(
+            "wake_conversation_ready from identity=%s",
+            data.caller_identity,
+        )
+        asyncio.create_task(_start_session())
+        return json.dumps({"status": "ok"})
 
     # ── Lightweight VAD: only detect speech start to resume ──
     async def _run_vad(track: rtc.Track):

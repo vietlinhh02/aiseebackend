@@ -31,22 +31,21 @@ func (s *Service) GetUserToken(
 ) (string, error) {
 	roomName := fmt.Sprintf("user-%s", userID)
 
-	slog.Info("scheduling room creation and agent dispatch asynchronously",
+	// Hoàn tất tạo phòng + dispatch agent trước khi trả JWT để app kết nối
+	// khi worker đã nhận job (giảm chờ agent sau wake word).
+	dispatchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	slog.Info("creating room and dispatching agent before token",
 		"room", roomName, "user", userID)
 
-	// dispatch agent asynchronously to not block token generation
-	go func() {
-		// Use a background context since the request context will be canceled
-		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+	if err := s.lk.CreateRoomWithAgent(dispatchCtx, roomName); err != nil {
+		slog.Error("agent dispatch failed",
+			"room", roomName, "error", err)
+		return "", fmt.Errorf("prepare voice room: %w", err)
+	}
 
-		if err := s.lk.CreateRoomWithAgent(bgCtx, roomName); err != nil {
-			slog.Error("agent dispatch failed",
-				"room", roomName, "error", err)
-		} else {
-			slog.Info("agent dispatched successfully", "room", roomName)
-		}
-	}()
+	slog.Info("agent dispatch ok, issuing token", "room", roomName)
 
 	return s.lk.CreateToken(roomName, userID, userName)
 }
