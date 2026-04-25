@@ -6,11 +6,13 @@ Tham chiếu: [livekit-examples/hello-wakeword](https://github.com/livekit-examp
 
 ## So sánh kiến trúc
 
-| Bước (ý tưởng LiveKit) | hello-wakeword (Python) | AiSee (Flutter) |
-|------------------------|-------------------------|-----------------|
-| Nghe wake, mic idle | `livekit-wakeword` + ONNX, `WakeWordListener` | `flutter_wake_word` + DaVoice + ONNX |
-| Sau wake, mở phiên thoại | Join room + stream audio | LiveKit đã kết nối → bật mic + `wake_conversation_ready` + Gemini Live (`agent_worker`) |
-| Agent | LiveKit Agents (ví dụ STT/LLM/TTS) | LiveKit Agents + `livekit-plugins-google` (Gemini Live) |
+
+| Bước (ý tưởng LiveKit)   | hello-wakeword (Python)                       | AiSee (Flutter)                                                                         |
+| ------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Nghe wake, mic idle      | `livekit-wakeword` + ONNX, `WakeWordListener` | `flutter_wake_word` + DaVoice + ONNX                                                    |
+| Sau wake, mở phiên thoại | Join room + stream audio                      | LiveKit đã kết nối → bật mic + `wake_conversation_ready` + Gemini Live (`agent_worker`) |
+| Agent                    | LiveKit Agents (ví dụ STT/LLM/TTS)            | LiveKit Agents + `livekit-plugins-google` (Gemini Live)                                 |
+
 
 ## AiSee đã bám pattern này chưa?
 
@@ -26,7 +28,7 @@ Khác biệt có chủ đích so với ví dụ Python:
 - [livekit-wakeword](https://github.com/livekit/livekit-wakeword) dùng để **huấn luyện / export ONNX** (tương thích openWakeWord). **Không** thay thế trực tiếp `flutter_wake_word` trên Dart.
 - Để dùng model do pipeline này sinh ra trên AiSee, cần **DaVoice / runtime ONNX trên app** chấp nhận đúng định dạng — đối chiếu tài liệu nhà cung cấp.
 
-File mẫu cấu hình huấn luyện (copy ra repo riêng khi chạy CLI): [`wakeword-livekit-aisee.example.yaml`](./wakeword-livekit-aisee.example.yaml).
+File mẫu cấu hình huấn luyện (copy ra repo riêng khi chạy CLI): [wakeword-livekit-aisee.example.yaml](./wakeword-livekit-aisee.example.yaml).
 
 ## Phản hồi người dùng sau wake (giống chuông `in.wav`)
 
