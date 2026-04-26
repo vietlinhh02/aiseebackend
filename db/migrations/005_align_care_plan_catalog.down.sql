@@ -1,0 +1,3 @@
+-- db/migrations/005_align_care_plan_catalog.down.sql
+-- Intentionally no-op: this migration replaces an incorrect draft catalog
+-- with the approved care-plan config and should not restore stale limits.

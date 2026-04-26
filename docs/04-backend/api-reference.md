@@ -67,6 +67,50 @@ Refresh JWT khi access token hết hạn.
 
 ---
 
+## Plans & Entitlements
+
+### GET /api/v1/plans
+
+Lấy danh sách plan active và toàn bộ entitlement do backend định nghĩa. Web/app dùng dữ liệu này để render pricing và quyền gói.
+
+| | |
+|---|---|
+| Auth | Không cần |
+| Response 200 | `{ "plans": [{ "code", "name", "price_vnd", "billing_period", "status", "sort_order", "entitlements": [{ "feature_key", "limit_value", "limit_unit?", "reset_period?", "metadata?" }] }] }` |
+
+Các plan seed ban đầu theo định hướng Family là payer:
+
+| Code | Tên | Giá | Billing |
+|---|---|---:|---|
+| `free` | Free / Essential | 0 VND | `month` |
+| `basic_149k` | Care Basic | 149000 VND | `month` |
+| `plus_399k` | Care Plus | 399000 VND | `month` |
+| `premium_599k` | Care Premium | 599000 VND | `month` |
+
+### GET /api/v1/me/subscription
+
+Lấy subscription hiện tại của user. Nếu user chưa có subscription active, backend vẫn trả `effective_plan` là plan active đầu tiên theo `sort_order`.
+
+| | |
+|---|---|
+| Auth | JWT required |
+| Response 200 | `{ "subscription": null \| { "id", "plan_code", "status", "current_period_start?", "current_period_end?", "cancel_at_period_end" }, "effective_plan": { "code", "name", "price_vnd", "billing_period", "status" }, "as_of": "timestamp" }` |
+
+### GET /api/v1/me/entitlements
+
+Lấy entitlement hiệu lực của user từ backend. Client không hardcode quyền gói; chỉ đọc map theo `feature_key`.
+
+| | |
+|---|---|
+| Auth | JWT required |
+| Response 200 | `{ "plan": { "code", "name", "price_vnd", "billing_period", "status" }, "entitlements": { "ai_minutes_per_month": { "limit_value": 150, "limit_unit": "minutes", "reset_period": "month" }, "camera_activations_per_day": { "limit_value": 3, "limit_unit": "activations", "reset_period": "day" }, "permission_matrix_level": { "limit_value": "none" } }, "as_of": "timestamp" }` |
+
+Entitlement seed ban đầu gồm:
+
+`sos_enabled`, `medication_reminders_enabled`, `read_messages_enabled`, `ai_minutes_per_month`, `camera_activations_per_day`, `video_calls_per_day`, `family_members_limit`, `cared_users_limit`, `care_timeline_days`, `daily_brief_enabled`, `daily_brief_customization_enabled`, `weekly_report_enabled`, `weekly_report_pdf_enabled`, `permission_matrix_level`, `volunteer_priority_level`, `pdf_exports_per_month`, `csv_exports_per_month`, `export_format`, `priority_support_enabled`, `incident_report_enabled`, `smart_alert_enabled`.
+
+---
+
 ## Users
 
 ### GET /api/v1/users/me

@@ -1,0 +1,211 @@
+package billing
+
+import "time"
+
+type UsageType string
+
+const (
+	UsageAIMinutes            UsageType = "ai_minutes"
+	UsageCameraActivations    UsageType = "camera_activations"
+	UsageVoiceCallMinutes     UsageType = "voice_call_minutes"
+	UsageVideoCallMinutes     UsageType = "video_call_minutes"
+	UsageMusicSessions        UsageType = "music_sessions"
+	UsageMusicMinutes         UsageType = "music_minutes"
+	UsageNavigationSessions   UsageType = "navigation_sessions"
+	UsageVolunteerMatches     UsageType = "volunteer_matches"
+	UsagePDFExports           UsageType = "pdf_exports"
+	UsageCareCoachQuestions   UsageType = "care_coach_questions"
+	UsagePatternDetectionRuns UsageType = "pattern_detection_runs"
+)
+
+type UsageRecordInput struct {
+	UserID    string         `json:"user_id"`
+	UsageType UsageType      `json:"usage_type"`
+	Quantity  float64        `json:"quantity"`
+	Unit      string         `json:"unit"`
+	Source    string         `json:"source"`
+	SourceID  string         `json:"source_id"`
+	StartedAt *time.Time     `json:"started_at,omitempty"`
+	EndedAt   *time.Time     `json:"ended_at,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type UsageRecord struct {
+	ID        string         `json:"id"`
+	UserID    string         `json:"user_id,omitempty"`
+	UsageType UsageType      `json:"usage_type"`
+	Quantity  float64        `json:"quantity"`
+	Unit      string         `json:"unit"`
+	Source    string         `json:"source"`
+	SourceID  string         `json:"source_id"`
+	StartedAt *time.Time     `json:"started_at,omitempty"`
+	EndedAt   *time.Time     `json:"ended_at,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+type UsageSessionInput struct {
+	UserID           string         `json:"user_id"`
+	UsageType        UsageType      `json:"usage_type"`
+	ReservedQuantity float64        `json:"reserved_quantity,omitempty"`
+	Unit             string         `json:"unit"`
+	Source           string         `json:"source"`
+	SourceID         string         `json:"source_id"`
+	StartedAt        time.Time      `json:"started_at"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+}
+
+type UsageSession struct {
+	ID                string         `json:"id"`
+	UserID            string         `json:"user_id,omitempty"`
+	UsageType         UsageType      `json:"usage_type"`
+	ReservedQuantity  float64        `json:"reserved_quantity,omitempty"`
+	CommittedQuantity float64        `json:"committed_quantity,omitempty"`
+	Unit              string         `json:"unit"`
+	Source            string         `json:"source"`
+	SourceID          string         `json:"source_id"`
+	Status            string         `json:"status"`
+	StartedAt         time.Time      `json:"started_at"`
+	EndedAt           *time.Time     `json:"ended_at,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
+type CommitUsageSessionInput struct {
+	UserID    string         `json:"user_id"`
+	UsageType UsageType      `json:"usage_type"`
+	Quantity  float64        `json:"quantity,omitempty"`
+	Unit      string         `json:"unit"`
+	Source    string         `json:"source"`
+	SourceID  string         `json:"source_id"`
+	StartedAt time.Time      `json:"started_at"`
+	EndedAt   time.Time      `json:"ended_at"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type UsageGrantInput struct {
+	UserID      string         `json:"user_id"`
+	UsageType   UsageType      `json:"usage_type"`
+	Quantity    float64        `json:"quantity"`
+	Unit        string         `json:"unit"`
+	Reason      string         `json:"reason"`
+	Source      string         `json:"source"`
+	SourceID    string         `json:"source_id"`
+	GrantedByID string         `json:"granted_by_id,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+type UsageGrant struct {
+	ID          string         `json:"id"`
+	UserID      string         `json:"user_id,omitempty"`
+	UsageType   UsageType      `json:"usage_type"`
+	Quantity    float64        `json:"quantity"`
+	Unit        string         `json:"unit"`
+	Reason      string         `json:"reason"`
+	Source      string         `json:"source"`
+	SourceID    string         `json:"source_id"`
+	GrantedByID string         `json:"granted_by_id,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+}
+
+type UsageTotal struct {
+	UsageType UsageType `json:"usage_type"`
+	Quantity  float64   `json:"quantity"`
+	Unit      string    `json:"unit"`
+}
+
+type UsageQuota struct {
+	UsageType        UsageType `json:"usage_type"`
+	FeatureKey       string    `json:"feature_key,omitempty"`
+	Limit            float64   `json:"limit"`
+	Used             float64   `json:"used"`
+	Granted          float64   `json:"granted"`
+	Remaining        float64   `json:"remaining"`
+	Unit             string    `json:"unit,omitempty"`
+	ResetPeriod      string    `json:"reset_period,omitempty"`
+	Unlimited        bool      `json:"unlimited"`
+	UpgradeSuggested bool      `json:"upgrade_suggested"`
+}
+
+type UsageResponse struct {
+	Plan        PlanSummary              `json:"plan"`
+	Quotas      map[UsageType]UsageQuota `json:"quotas"`
+	TopUsage    []UsageTotal             `json:"top_usage"`
+	PeriodStart time.Time                `json:"period_start"`
+	PeriodEnd   time.Time                `json:"period_end"`
+	AsOf        time.Time                `json:"as_of"`
+}
+
+type Plan struct {
+	ID            string        `json:"id,omitempty"`
+	Code          string        `json:"code"`
+	Name          string        `json:"name"`
+	PriceVND      int64         `json:"price_vnd"`
+	BillingPeriod string        `json:"billing_period"`
+	Status        string        `json:"status"`
+	SortOrder     int32         `json:"sort_order"`
+	Entitlements  []Entitlement `json:"entitlements"`
+}
+
+type PlanSummary struct {
+	ID            string `json:"id,omitempty"`
+	Code          string `json:"code"`
+	Name          string `json:"name"`
+	PriceVND      int64  `json:"price_vnd"`
+	BillingPeriod string `json:"billing_period"`
+	Status        string `json:"status"`
+}
+
+type Entitlement struct {
+	FeatureKey  string         `json:"feature_key"`
+	LimitValue  any            `json:"limit_value"`
+	LimitUnit   string         `json:"limit_unit,omitempty"`
+	ResetPeriod string         `json:"reset_period,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+type EntitlementValue struct {
+	LimitValue  any            `json:"limit_value"`
+	LimitUnit   string         `json:"limit_unit,omitempty"`
+	ResetPeriod string         `json:"reset_period,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+type Subscription struct {
+	ID                     string         `json:"id"`
+	UserID                 string         `json:"user_id,omitempty"`
+	PlanID                 string         `json:"plan_id,omitempty"`
+	PlanCode               string         `json:"plan_code"`
+	PlanName               string         `json:"plan_name,omitempty"`
+	Status                 string         `json:"status"`
+	CurrentPeriodStart     *time.Time     `json:"current_period_start,omitempty"`
+	CurrentPeriodEnd       *time.Time     `json:"current_period_end,omitempty"`
+	CancelAtPeriodEnd      bool           `json:"cancel_at_period_end"`
+	Provider               string         `json:"provider,omitempty"`
+	ProviderSubscriptionID string         `json:"provider_subscription_id,omitempty"`
+	Metadata               map[string]any `json:"metadata,omitempty"`
+}
+
+type SubscriptionResponse struct {
+	Subscription  *Subscription `json:"subscription"`
+	EffectivePlan PlanSummary   `json:"effective_plan"`
+	AsOf          time.Time     `json:"as_of"`
+}
+
+type EntitlementsResponse struct {
+	Plan         PlanSummary                 `json:"plan"`
+	Entitlements map[string]EntitlementValue `json:"entitlements"`
+	AsOf         time.Time                   `json:"as_of"`
+}
+
+func summarizePlan(plan Plan) PlanSummary {
+	return PlanSummary{
+		ID:            plan.ID,
+		Code:          plan.Code,
+		Name:          plan.Name,
+		PriceVND:      plan.PriceVND,
+		BillingPeriod: plan.BillingPeriod,
+		Status:        plan.Status,
+	}
+}

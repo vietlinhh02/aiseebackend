@@ -2,7 +2,7 @@
 
 ## Tổng quan
 
-AiSee sử dụng PostgreSQL với 10 tables chinh. Tất cả primary key la UUID (`gen_random_uuid()`). Timestamps dung `TIMESTAMPTZ` (co timezone).
+AiSee sử dụng PostgreSQL với 14 tables chinh. Tất cả primary key la UUID (`gen_random_uuid()`). Timestamps dung `TIMESTAMPTZ` (co timezone).
 
 ## Tables
 
@@ -37,6 +37,82 @@ CREATE TABLE users (
 | `apns_token` | Apple Push Notification token (iOS standard) |
 | `apns_voip_token` | Apple VoIP Push token (iOS PushKit) — dùng cho incoming calls |
 | `settings` | JSONB lưu các tùy chọn ca nhan (font size, notification preferences) |
+
+### plans
+
+Backend source of truth cho các gói thương mại. App/web chỉ render theo API trả về, không hardcode quyền gói.
+
+```sql
+CREATE TABLE plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    price_vnd INTEGER NOT NULL CHECK (price_vnd >= 0),
+    billing_period TEXT NOT NULL CHECK (billing_period IN ('month', 'year')),
+    status TEXT NOT NULL DEFAULT 'active',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+### plan_entitlements
+
+Quyền và hạn mức theo từng plan. `limit_value` là JSONB để hỗ trợ cả số (`300`) và boolean (`true`) mà không cần client suy luận.
+
+```sql
+CREATE TABLE plan_entitlements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan_id UUID NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    feature_key TEXT NOT NULL,
+    limit_value JSONB NOT NULL,
+    limit_unit TEXT,
+    reset_period TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(plan_id, feature_key)
+);
+```
+
+### subscriptions
+
+Subscription hiện tại/lịch sử của user. Endpoint `/api/v1/me/entitlements` dùng subscription active nếu có, nếu không dùng plan active đầu tiên theo `sort_order`.
+
+```sql
+CREATE TABLE subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id UUID NOT NULL REFERENCES plans(id),
+    status TEXT NOT NULL,
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT false,
+    provider TEXT,
+    provider_subscription_id TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+### subscription_events
+
+Append-only event log cho webhook, admin action, hoặc thay đổi subscription thủ công.
+
+```sql
+CREATE TABLE subscription_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    subscription_id UUID REFERENCES subscriptions(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    provider TEXT,
+    provider_event_id TEXT,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
 
 ### family_links
 
@@ -245,6 +321,11 @@ CREATE TABLE audit_logs (
 | `idx_family_links_user` | family_links | Tim nhanh family members của mot user. |
 | `idx_family_links_family` | family_links | Tim nhanh users ma mot family member được link toi. |
 | `idx_messages_sender` | messages | Lấy tin nhắn da gửi boi mot user. |
+| `idx_plans_status_sort` | plans | Lấy danh sách plan active đúng thứ tự hiển thị. |
+| `idx_plan_entitlements_plan` | plan_entitlements | Lấy entitlement theo plan. |
+| `idx_subscriptions_user_status` | subscriptions | Tìm subscription active của user. |
+| `idx_subscription_events_subscription` | subscription_events | Audit event theo subscription. |
+| `idx_subscription_events_user` | subscription_events | Audit event theo user. |
 
 **Nguyên tắc chung:** Mỗi index phai phuc vu ít nhất mot query thuong xuyen. Partial indexes (`WHERE` clause) giam kich thuoc index và tang hiệu suất cho các queries cu the.
 

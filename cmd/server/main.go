@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/auth"
+	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dashboard"
@@ -111,6 +112,8 @@ func main() {
 
 	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
+	billingService := billing.NewService(billing.NewPgxStore(pool))
+	billingHandler := billing.NewHandler(billingService)
 
 	lkClient := lk.NewClient(
 		os.Getenv("LIVEKIT_URL"),
@@ -197,6 +200,7 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/google", authHandler.GoogleAuth)
 		r.Post("/auth/refresh", authHandler.Refresh)
+		r.Get("/plans", billingHandler.ListPlans)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(jwtSecret, rdb))
@@ -225,6 +229,9 @@ func main() {
 
 			// My health (user's own data)
 			r.Route("/me", func(r chi.Router) {
+				r.Get("/subscription", billingHandler.CurrentSubscription)
+				r.Get("/entitlements", billingHandler.CurrentEntitlements)
+				r.Get("/usage", billingHandler.CurrentUsage)
 				r.Get("/medications", meHandler.Medications)
 				r.Get("/appointments", meHandler.Appointments)
 				r.Get("/health", meHandler.Health)
@@ -259,6 +266,10 @@ func main() {
 	r.Route("/api/internal", func(r chi.Router) {
 		r.Use(middleware.InternalAuth(internalKey))
 		r.Post("/tool-call", toolHandler.HandleToolCall)
+		r.Post("/usage/record", billingHandler.RecordUsage)
+		r.Post("/usage/session/start", billingHandler.StartUsageSession)
+		r.Post("/usage/session/commit", billingHandler.CommitUsageSession)
+		r.Post("/usage/grant", billingHandler.GrantUsageQuota)
 	})
 
 	port := os.Getenv("PORT")
