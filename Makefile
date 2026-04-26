@@ -37,6 +37,7 @@ db-down: ## Stop Docker services
 # === Database ===
 
 MIGRATE := $(shell command -v migrate 2>/dev/null || echo "$(shell go env GOPATH)/bin/migrate")
+GOLANGCI_LINT := $(shell command -v golangci-lint 2>/dev/null || echo "$(shell go env GOPATH)/bin/golangci-lint")
 
 migrate: ## Run database migrations
 	@test -f $(MIGRATE) || go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
@@ -79,8 +80,8 @@ build-docker: ## Build all Docker images
 # === Quality ===
 
 lint: ## Run linter (requires golangci-lint)
-	@command -v golangci-lint > /dev/null 2>&1 || { echo "Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 1; }
-	golangci-lint run ./...
+	@test -f $(GOLANGCI_LINT) || { echo "Install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 1; }
+	$(GOLANGCI_LINT) run ./...
 
 fmt: ## Format code
 	gofmt -s -w .

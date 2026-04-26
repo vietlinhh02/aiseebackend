@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
-	"nhooyr.io/websocket"
 
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 	"github.com/team-dang/aiseebackend/internal/middleware"

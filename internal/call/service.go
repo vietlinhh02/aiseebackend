@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,15 +16,30 @@ import (
 )
 
 type Service struct {
-	lk     *lk.Client
-	pusher *push.Pusher
-	hub    *chat.Hub
+	lk          *lk.Client
+	pusher      *push.Pusher
+	hub         *chat.Hub
+	activeCalls map[string]activeCall
+	activeMu    sync.Mutex
 }
 
 func NewService(
 	lkClient *lk.Client, pusher *push.Pusher, hub *chat.Hub,
 ) *Service {
-	return &Service{lk: lkClient, pusher: pusher, hub: hub}
+	return &Service{
+		lk:          lkClient,
+		pusher:      pusher,
+		hub:         hub,
+		activeCalls: make(map[string]activeCall),
+	}
+}
+
+type activeCall struct {
+	CallerID     string
+	CalleeID     string
+	CallType     string
+	CallerTokens push.UserTokens
+	CalleeTokens push.UserTokens
 }
 
 func (s *Service) GetUserToken(
@@ -57,12 +73,15 @@ type CreateRoomResult struct {
 
 func (s *Service) CreateRoom(
 	ctx context.Context,
-	callerID, callerName string,
+	caller dbgen.User,
 	callee dbgen.User,
 	callType string,
 ) (CreateRoomResult, error) {
 	shortID := uuid.New().String()[:8]
 	roomName := fmt.Sprintf("call-%s", shortID)
+	callerID := pgutil.PgUUIDToString(caller.ID)
+	callerName := caller.DisplayName
+	calleeIDStr := pgutil.PgUUIDToString(callee.ID)
 
 	if err := s.lk.CreateRoom(ctx, roomName); err != nil {
 		return CreateRoomResult{}, err
@@ -92,6 +111,9 @@ func (s *Service) CreateRoom(
 		"call_type":   callType,
 		"token":       calleeToken,
 	}
+	if caller.AvatarUrl.Valid {
+		payload["caller_avatar_url"] = caller.AvatarUrl.String
+	}
 
 	s.pusher.Send(ctx, push.UserTokens{
 		FcmToken:      callee.FcmToken,
@@ -104,7 +126,21 @@ func (s *Service) CreateRoom(
 		Data:  payload,
 	})
 
-	calleeIDStr := pgutil.PgUUIDToString(callee.ID)
+	s.rememberActiveCall(roomName, activeCall{
+		CallerID: callerID,
+		CalleeID: calleeIDStr,
+		CallType: callType,
+		CallerTokens: push.UserTokens{
+			FcmToken:      caller.FcmToken,
+			ApnsToken:     caller.ApnsToken,
+			ApnsVoipToken: caller.ApnsVoipToken,
+		},
+		CalleeTokens: push.UserTokens{
+			FcmToken:      callee.FcmToken,
+			ApnsToken:     callee.ApnsToken,
+			ApnsVoipToken: callee.ApnsVoipToken,
+		},
+	})
 	if s.hub.IsOnline(calleeIDStr) {
 		s.hub.SendToUser(calleeIDStr, chat.WSMessage{
 			Type:    "incoming_call",
@@ -118,7 +154,70 @@ func (s *Service) CreateRoom(
 }
 
 func (s *Service) EndRoom(
-	ctx context.Context, roomName string,
+	ctx context.Context, requesterID, roomName string,
 ) error {
-	return s.lk.DeleteRoom(ctx, roomName)
+	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
+		return err
+	}
+	if call, ok := s.forgetActiveCall(roomName); ok {
+		s.notifyCallEnded(ctx, roomName, requesterID, call)
+	}
+	return nil
+}
+
+func (s *Service) rememberActiveCall(roomName string, call activeCall) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	s.activeCalls[roomName] = call
+}
+
+func (s *Service) forgetActiveCall(roomName string) (activeCall, bool) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	call, ok := s.activeCalls[roomName]
+	if ok {
+		delete(s.activeCalls, roomName)
+	}
+	return call, ok
+}
+
+func (s *Service) notifyCallEnded(
+	ctx context.Context,
+	roomName string,
+	requesterID string,
+	call activeCall,
+) {
+	recipientID := call.CalleeID
+	if requesterID == call.CalleeID {
+		recipientID = call.CallerID
+	}
+	if recipientID == "" || recipientID == requesterID {
+		return
+	}
+
+	payload := map[string]string{
+		"type":      "call_ended",
+		"room_name": roomName,
+		"ended_by":  requesterID,
+		"call_type": call.CallType,
+	}
+	if s.hub.IsOnline(recipientID) {
+		s.hub.SendToUser(recipientID, chat.WSMessage{
+			Type:    "call_ended",
+			Message: payload,
+		})
+	}
+	if s.pusher == nil {
+		return
+	}
+	tokens := call.CalleeTokens
+	if recipientID == call.CallerID {
+		tokens = call.CallerTokens
+	}
+	s.pusher.Send(ctx, tokens, push.Notification{
+		Title: "AiSee",
+		Body:  "Cuộc gọi đã kết thúc",
+		Type:  "voip",
+		Data:  payload,
+	})
 }

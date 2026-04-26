@@ -43,8 +43,12 @@ func createMultipartRequest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	part.Write(content)
-	w.Close()
+	if _, err := part.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(
 		http.MethodPost, "/api/v1/upload", &buf,
@@ -74,7 +78,9 @@ func TestUpload_Success_Audio(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["url"] == "" {
 		t.Error("expected url in response")
 	}

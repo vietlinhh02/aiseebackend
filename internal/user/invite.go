@@ -7,6 +7,8 @@ import (
 
 func GenerateInviteCode() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("generate invite code: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

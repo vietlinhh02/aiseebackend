@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 type Hub struct {
@@ -23,7 +23,9 @@ func (h *Hub) Add(userID string, conn *websocket.Conn) {
 	defer h.mu.Unlock()
 
 	if old, ok := h.conns[userID]; ok {
-		old.CloseNow()
+		if err := old.CloseNow(); err != nil {
+			slog.Error("close old websocket", "error", err)
+		}
 	}
 	h.conns[userID] = conn
 }

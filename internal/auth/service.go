@@ -99,7 +99,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 
 	// Invalidate the old refresh token (rotation)
 	if exp, ok := claims["exp"].(float64); ok {
-		ttl := time.Unix(int64(exp), 0).Sub(time.Now())
+		ttl := time.Until(time.Unix(int64(exp), 0))
 		if ttl > 0 && s.rdb != nil {
 			s.rdb.Set(ctx, "revoked:"+jti, "1", ttl)
 		}

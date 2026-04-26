@@ -68,10 +68,16 @@ func TestScheduler_FiresDueReminders(t *testing.T) {
 	s.Register("test", handler)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go s.Start(ctx)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Start(ctx)
+	}()
 
 	time.Sleep(300 * time.Millisecond)
 	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("scheduler start returned error: %v", err)
+	}
 
 	calls := handler.getDueCalls()
 	if len(calls) != 1 {

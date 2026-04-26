@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,12 +87,44 @@ func (s *Service) SendMessage(
 		}
 	}
 
+	wsPayload := messagePayload(msg)
+	if sErr == nil {
+		wsPayload["sender_name"] = sender.DisplayName
+		if sender.AvatarUrl.Valid {
+			wsPayload["sender_avatar_url"] = sender.AvatarUrl.String
+		}
+	}
 	s.hub.SendToUser(receiverID, WSMessage{
 		Type:    "new_message",
-		Message: msg,
+		Message: wsPayload,
 	})
 
 	return msg, nil
+}
+
+func messagePayload(msg dbgen.Message) map[string]any {
+	payload := map[string]any{
+		"id":           pgutil.PgUUIDToString(msg.ID),
+		"sender_id":    pgutil.PgUUIDToString(msg.SenderID),
+		"receiver_id":  pgutil.PgUUIDToString(msg.ReceiverID),
+		"content_text": "",
+		"voice_url":    "",
+		"is_read":      false,
+		"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if msg.ContentText.Valid {
+		payload["content_text"] = msg.ContentText.String
+	}
+	if msg.VoiceUrl.Valid {
+		payload["voice_url"] = msg.VoiceUrl.String
+	}
+	if msg.IsRead.Valid {
+		payload["is_read"] = msg.IsRead.Bool
+	}
+	if msg.CreatedAt.Valid {
+		payload["created_at"] = msg.CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	}
+	return payload
 }
 
 func (s *Service) GetMessages(

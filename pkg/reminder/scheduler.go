@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -29,7 +28,6 @@ type Scheduler struct {
 	rdb      *redis.Client
 	entries  []handlerEntry
 	interval time.Duration
-	mu       sync.Mutex
 	cancel   context.CancelFunc
 }
 

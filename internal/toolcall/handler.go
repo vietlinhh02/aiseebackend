@@ -163,8 +163,7 @@ func (h *Handler) handleMakeCall(
 	}
 
 	result, err := h.call.CreateRoom(
-		ctx, req.UserID, caller.DisplayName,
-		member.User, callType,
+		ctx, caller, member.User, callType,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create room: %w", err)
@@ -249,7 +248,7 @@ func (h *Handler) handleReadUnread(
 		results = append(results, msgInfo{
 			SenderName: sender.DisplayName,
 			Content:    m.ContentText.String,
-			SentAt:     m.CreatedAt.Time.Format(
+			SentAt: m.CreatedAt.Time.Format(
 				"2006-01-02T15:04:05+07:00",
 			),
 		})

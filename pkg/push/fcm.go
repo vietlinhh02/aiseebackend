@@ -70,9 +70,15 @@ func (f *FCMSender) getAccessToken(
 		return "", err
 	}
 
-	creds, err := google.CredentialsFromJSON(
-		ctx, data,
-		"https://www.googleapis.com/auth/firebase.messaging",
+	creds, err := google.CredentialsFromJSONWithTypeAndParams(
+		ctx,
+		data,
+		google.ServiceAccount,
+		google.CredentialsParams{
+			Scopes: []string{
+				"https://www.googleapis.com/auth/firebase.messaging",
+			},
+		},
 	)
 	if err != nil {
 		return "", err

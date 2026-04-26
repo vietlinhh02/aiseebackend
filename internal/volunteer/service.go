@@ -299,7 +299,11 @@ func (s *Service) matchLoop(userID, matchID string) {
 		}
 	}
 
-	s.lk.DeleteRoom(ctx, roomName)
+	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
+		slog.Error("matchLoop: delete room",
+			"room", roomName, "error", err,
+		)
+	}
 	s.rdb.HSet(ctx, key, "status", "failed")
 }
 

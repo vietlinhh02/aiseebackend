@@ -109,8 +109,7 @@ func (h *Handler) CreateRoom(
 	}
 
 	result, err := h.service.CreateRoom(
-		r.Context(), userID, caller.DisplayName,
-		callee, req.CallType,
+		r.Context(), caller, callee, req.CallType,
 	)
 	if err != nil {
 		response.Err(
@@ -130,6 +129,7 @@ type EndRoomRequest struct {
 func (h *Handler) EndRoom(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	userID := middleware.UserIDFromContext(r.Context())
 	var req EndRoomRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Err(
@@ -140,7 +140,7 @@ func (h *Handler) EndRoom(
 	}
 
 	if err := h.service.EndRoom(
-		r.Context(), req.RoomName,
+		r.Context(), userID, req.RoomName,
 	); err != nil {
 		response.Err(
 			w, http.StatusInternalServerError,

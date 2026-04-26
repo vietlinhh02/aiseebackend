@@ -136,13 +136,19 @@ func (s *Service) Alert(
 	s.lastAlert.Store(userID, time.Now())
 
 	// Update last known location
-	s.queries.UpdateUserLocation(
+	if err := s.queries.UpdateUserLocation(
 		ctx, dbgen.UpdateUserLocationParams{
 			ID:      uid,
 			LastLat: pgtype.Float8{Float64: lat, Valid: true},
 			LastLng: pgtype.Float8{Float64: lng, Valid: true},
 		},
-	)
+	); err != nil {
+		slog.Error(
+			"update user location",
+			"user_id", userID,
+			"error", err,
+		)
+	}
 
 	return AlertResult{
 		RoomName:       roomName,
@@ -267,14 +273,18 @@ func (s *Service) waitForAnswer(
 	for {
 		select {
 		case <-ctx.Done():
-			s.lk.DeleteRoom(
+			if err := s.lk.DeleteRoom(
 				context.Background(), roomName,
-			)
+			); err != nil {
+				slog.Error("delete room", "room", roomName, "error", err)
+			}
 			return false, ctx.Err()
 		case <-deadline:
-			s.lk.DeleteRoom(
+			if err := s.lk.DeleteRoom(
 				context.Background(), roomName,
-			)
+			); err != nil {
+				slog.Error("delete room", "room", roomName, "error", err)
+			}
 			return false, nil
 		case <-ticker.C:
 			participants, err := s.lk.ListParticipants(
