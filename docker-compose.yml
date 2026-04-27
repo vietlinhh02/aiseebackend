@@ -42,6 +42,8 @@ services:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - ASSISTANT_BRIDGE_URL=${DOCKER_ASSISTANT_BRIDGE_URL:-ws://agent:8765/ws}
+      - PUBLIC_API_BASE_URL=${PUBLIC_API_BASE_URL:-https://data.visme.tech}
       - S3_ENDPOINT=minio:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
@@ -50,6 +52,8 @@ services:
 
   agent:
     build: ./agent_worker
+    ports:
+      - "8765:8765"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file: .env
@@ -57,10 +61,23 @@ services:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - AI_TRANSPORT=${AI_TRANSPORT:-websocket}
+      - ASSISTANT_WS_HOST=${ASSISTANT_WS_HOST:-0.0.0.0}
+      - ASSISTANT_WS_PORT=${ASSISTANT_WS_PORT:-8765}
       - GO_BACKEND_URL=${GO_BACKEND_URL:-http://host.docker.internal:8080/api/internal}
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-live-preview}
+      - GEMINI_VOICE=${GEMINI_VOICE:-Aoede}
+      - GEMINI_THINKING_LEVEL=${GEMINI_THINKING_LEVEL:-low}
+      - GEMINI_AUDIO_SAMPLE_RATE=${GEMINI_AUDIO_SAMPLE_RATE:-16000}
+      - GEMINI_RESPONSE_AUDIO_SAMPLE_RATE=${GEMINI_RESPONSE_AUDIO_SAMPLE_RATE:-24000}
+      - GEMINI_VIDEO_ENABLED=${GEMINI_VIDEO_ENABLED:-true}
+      - GEMINI_VIDEO_FPS_SPEAKING=${GEMINI_VIDEO_FPS_SPEAKING:-1}
+      - GEMINI_VIDEO_FPS_IDLE=${GEMINI_VIDEO_FPS_IDLE:-0.33}
+      - GEMINI_GOOGLE_SEARCH_ENABLED=${GEMINI_GOOGLE_SEARCH_ENABLED:-false}
+      - EXA_API_KEY=${EXA_API_KEY}
+      - EXA_SEARCH_MAX_RESULTS=${EXA_SEARCH_MAX_RESULTS:-3}
 
 volumes:
   pgdata:

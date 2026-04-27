@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/appointment"
+	"github.com/team-dang/aiseebackend/internal/assistant"
 	"github.com/team-dang/aiseebackend/internal/auth"
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/call"
@@ -109,6 +110,9 @@ func main() {
 	queries := dbgen.New(pool)
 	authService := auth.NewService(pool, rdb, jwtSecret)
 	authHandler := auth.NewHandler(authService)
+	assistantBridge := assistant.NewWebSocketBridge(os.Getenv("ASSISTANT_BRIDGE_URL"))
+	assistantService := assistant.NewServiceWithBridge(jwtSecret, assistantBridge)
+	assistantHandler := assistant.NewHandler(assistantService)
 
 	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
@@ -161,7 +165,7 @@ func main() {
 	defer scheduler.Stop()
 
 	emergService := emergency.NewService(queries, pusher, lkClient)
-	musicService := music.NewService()
+	musicService := music.NewService(publicBaseURL())
 
 	// Dashboard
 	dashService := dashboard.NewService(queries)
@@ -208,6 +212,7 @@ func main() {
 		r.Post("/auth/google", authHandler.GoogleAuth)
 		r.Post("/auth/refresh", authHandler.Refresh)
 		r.Get("/plans", billingHandler.ListPlans)
+		r.Get("/music/stream/{id}", musicService.Stream)
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(jwtSecret, rdb))
@@ -233,6 +238,9 @@ func main() {
 
 			// Upload
 			r.Post("/upload", uploadHandler.Upload)
+
+			// AI assistant
+			r.Post("/ai/session", assistantHandler.CreateSession)
 
 			// My health (user's own data)
 			r.Route("/me", func(r chi.Router) {
@@ -268,6 +276,7 @@ func main() {
 		})
 
 		// WebSocket (auth via query param, not middleware)
+		r.Get("/ai/ws", assistantHandler.WebSocket)
 		r.Get("/ws/chat", chatHandler.WebSocket)
 	})
 
@@ -293,6 +302,19 @@ func main() {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func publicBaseURL() string {
+	if value := os.Getenv("PUBLIC_API_BASE_URL"); value != "" {
+		return value
+	}
+	if value := os.Getenv("APP_PUBLIC_BASE_URL"); value != "" {
+		return value
+	}
+	if domain := os.Getenv("DOMAIN"); domain != "" {
+		return "https://" + domain
+	}
+	return ""
 }
 
 func initPusher() *push.Pusher {

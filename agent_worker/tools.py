@@ -288,47 +288,18 @@ class AiSeeAgent(Agent):
     @function_tool()
     async def play_music(self, query: str) -> dict:
         """Tim va phat nhac theo yeu cau."""
-        result = await self._backend.tool_call_with_timeout(
-            "play_music", self._uid(), {"query": query},
-            timeout=20.0,
-        )
-        play_action = result.pop("play_action", None)
-        if play_action and isinstance(play_action, dict):
-            try:
-                await self._lp.perform_rpc(
-                    destination_identity=self._user_identity(),
-                    method='play_audio',
-                    payload=json.dumps(
-                        play_action.get("params", {}),
-                    ),
-                )
-                await self._backend.record_usage(
-                    self._uid(),
-                    "music_sessions",
-                    1,
-                    "sessions",
-                    "agent",
-                    f"music-{uuid.uuid4()}",
-                    {"query": query, "title": result.get("title", "")},
-                )
-            except Exception as exc:
-                logger.warning(
-                    "play_audio RPC failed: %s", exc,
-                )
-        return result
+        return {
+            "status": "disabled",
+            "message": "music playback is temporarily disabled",
+        }
 
     @function_tool()
     async def control_music(self, action: str) -> dict:
         """Dieu khien nhac dang phat: pause, resume, stop, next, previous, volume_up, volume_down."""
-        try:
-            response = await self._lp.perform_rpc(
-                destination_identity=self._user_identity(),
-                method='control_audio',
-                payload=json.dumps({"command": action}),
-            )
-            return json.loads(response)
-        except Exception as exc:
-            return {"status": "error", "error": str(exc)}
+        return {
+            "status": "disabled",
+            "message": "music playback is temporarily disabled",
+        }
 
     # --- Phase 2d: Navigation ---
 
