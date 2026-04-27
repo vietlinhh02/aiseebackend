@@ -8,15 +8,20 @@ import (
 )
 
 type fakeStore struct {
-	plans        []Plan
-	entitlements map[string][]Entitlement
-	subscription *Subscription
-	records      []UsageRecordInput
-	sessions     []UsageSessionInput
-	commits      []CommitUsageSessionInput
-	grants       []UsageGrantInput
-	usageTotals  []UsageTotal
-	grantTotals  []UsageTotal
+	plans                   []Plan
+	entitlements            map[string][]Entitlement
+	subscription            *Subscription
+	careGroup               CareGroupSummary
+	caredUserIDs            []string
+	events                  []SubscriptionEvent
+	records                 []UsageRecordInput
+	sessions                []UsageSessionInput
+	commits                 []CommitUsageSessionInput
+	grants                  []UsageGrantInput
+	providerSubscriptions   []ProviderSubscriptionInput
+	subscriptionEventInputs []SubscriptionEventInput
+	usageTotals             []UsageTotal
+	grantTotals             []UsageTotal
 }
 
 func (f *fakeStore) ListPlans(
@@ -43,6 +48,46 @@ func (f *fakeStore) CurrentSubscription(
 	return f.subscription, nil
 }
 
+func (f *fakeStore) DefaultCareGroup(
+	_ context.Context,
+	userID string,
+) (CareGroupSummary, error) {
+	if f.careGroup.ID != "" {
+		return f.careGroup, nil
+	}
+	return CareGroupSummary{
+		ID:               "group-" + userID,
+		Name:             "AiSee Care Group",
+		OwnerUserID:      userID,
+		CurrentUserRole:  "owner",
+		CanManageBilling: true,
+		CaredUserCount:   1,
+		MemberCount:      1,
+	}, nil
+}
+
+func (f *fakeStore) CurrentSubscriptionForCareGroup(
+	_ context.Context,
+	_ string,
+) (*Subscription, error) {
+	return f.subscription, nil
+}
+
+func (f *fakeStore) CaredUserIDsForCareGroup(
+	_ context.Context,
+	_ string,
+) ([]string, error) {
+	return f.caredUserIDs, nil
+}
+
+func (f *fakeStore) SubscriptionEventsForCareGroup(
+	_ context.Context,
+	_ string,
+	_ int,
+) ([]SubscriptionEvent, error) {
+	return f.events, nil
+}
+
 func (f *fakeStore) PlanByID(
 	_ context.Context,
 	planID string,
@@ -55,11 +100,74 @@ func (f *fakeStore) PlanByID(
 	return Plan{}, errors.New("plan not found")
 }
 
+func (f *fakeStore) PlanByCode(
+	_ context.Context,
+	code string,
+) (Plan, error) {
+	for _, plan := range f.plans {
+		if plan.Code == code {
+			return plan, nil
+		}
+	}
+	return Plan{}, errors.New("plan not found")
+}
+
 func (f *fakeStore) EntitlementsForPlan(
 	_ context.Context,
 	planID string,
 ) ([]Entitlement, error) {
 	return f.entitlements[planID], nil
+}
+
+func (f *fakeStore) UpsertProviderSubscription(
+	_ context.Context,
+	input ProviderSubscriptionInput,
+) (Subscription, error) {
+	f.providerSubscriptions = append(f.providerSubscriptions, input)
+	var plan Plan
+	for _, candidate := range f.plans {
+		if candidate.ID == input.PlanID {
+			plan = candidate
+			break
+		}
+	}
+	if plan.ID == "" {
+		return Subscription{}, errors.New("plan not found")
+	}
+	return Subscription{
+		ID:                     "sub-" + input.ProviderSubscriptionID,
+		UserID:                 input.UserID,
+		CareGroupID:            input.CareGroupID,
+		PlanID:                 input.PlanID,
+		PlanCode:               plan.Code,
+		PlanName:               plan.Name,
+		Status:                 input.Status,
+		CurrentPeriodStart:     input.CurrentPeriodStart,
+		CurrentPeriodEnd:       input.CurrentPeriodEnd,
+		CancelAtPeriodEnd:      input.CancelAtPeriodEnd,
+		Provider:               input.Provider,
+		ProviderSubscriptionID: input.ProviderSubscriptionID,
+		Metadata:               input.Metadata,
+	}, nil
+}
+
+func (f *fakeStore) InsertSubscriptionEvent(
+	_ context.Context,
+	input SubscriptionEventInput,
+) (SubscriptionEvent, error) {
+	f.subscriptionEventInputs = append(f.subscriptionEventInputs, input)
+	return SubscriptionEvent{
+		ID:              "event-" + input.ProviderEventID,
+		SubscriptionID:  input.SubscriptionID,
+		CareGroupID:     input.CareGroupID,
+		UserID:          input.UserID,
+		EventType:       input.EventType,
+		Provider:        input.Provider,
+		ProviderEventID: input.ProviderEventID,
+		Payload:         input.Payload,
+		OccurredAt:      input.OccurredAt,
+		CreatedAt:       input.OccurredAt,
+	}, nil
 }
 
 func (f *fakeStore) RecordUsage(
@@ -145,6 +253,22 @@ func (f *fakeStore) UsageTotals(
 func (f *fakeStore) UsageGrantTotals(
 	_ context.Context,
 	_ string,
+	_, _ time.Time,
+) ([]UsageTotal, error) {
+	return f.grantTotals, nil
+}
+
+func (f *fakeStore) UsageTotalsForUsers(
+	_ context.Context,
+	_ []string,
+	_, _ time.Time,
+) ([]UsageTotal, error) {
+	return f.usageTotals, nil
+}
+
+func (f *fakeStore) UsageGrantTotalsForUsers(
+	_ context.Context,
+	_ []string,
 	_, _ time.Time,
 ) ([]UsageTotal, error) {
 	return f.grantTotals, nil
@@ -260,6 +384,124 @@ func TestServiceCurrentSubscriptionUsesActiveSubscriptionPlan(
 	}
 	if resp.EffectivePlan.Code != "plus_399k" {
 		t.Fatalf("want plus effective plan, got %q", resp.EffectivePlan.Code)
+	}
+}
+
+func TestServiceCurrentBillingOverviewUsesCareGroupSubscriptionAndUsage(
+	t *testing.T,
+) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-free",
+				Code:          "free",
+				Name:          "Free / Essential",
+				PriceVND:      0,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-plus",
+				Code:          "plus_399k",
+				Name:          "Care Plus",
+				PriceVND:      399000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-plus": {
+				{
+					FeatureKey:  "ai_minutes_per_month",
+					LimitValue:  float64(600),
+					LimitUnit:   "minutes",
+					ResetPeriod: "month",
+				},
+				{
+					FeatureKey: "weekly_report_enabled",
+					LimitValue: true,
+				},
+			},
+		},
+		subscription: &Subscription{
+			ID:          "sub-plus",
+			CareGroupID: "group-1",
+			PlanID:      "plan-plus",
+			PlanCode:    "plus_399k",
+			Status:      "active",
+			Provider:    "google_play",
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh me",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "billing_admin",
+			CanManageBilling: true,
+			CaredUserCount:   2,
+			MemberCount:      3,
+		},
+		caredUserIDs: []string{"user-1", "user-2"},
+		usageTotals: []UsageTotal{
+			{
+				UsageType: UsageAIMinutes,
+				Quantity:  480,
+				Unit:      "minutes",
+			},
+		},
+		events: []SubscriptionEvent{
+			{
+				ID:        "event-1",
+				EventType: "subscription_renewed",
+				Provider:  "google_play",
+				CreatedAt: time.Date(2026, 4, 26, 1, 2, 3, 0, time.UTC),
+			},
+		},
+	}
+
+	resp, err := NewService(store).CurrentBillingOverview(
+		context.Background(),
+		"family-1",
+	)
+	if err != nil {
+		t.Fatalf("CurrentBillingOverview() error: %v", err)
+	}
+
+	if resp.CareGroup.ID != "group-1" || !resp.CareGroup.CanManageBilling {
+		t.Fatalf("unexpected care group: %+v", resp.CareGroup)
+	}
+	if resp.EffectivePlan.Code != "plus_399k" {
+		t.Fatalf("want plus plan, got %q", resp.EffectivePlan.Code)
+	}
+	quota := resp.Usage.Quotas[UsageAIMinutes]
+	if quota.Limit != 600 || quota.Used != 480 || quota.Remaining != 120 {
+		t.Fatalf("unexpected AI quota: %+v", quota)
+	}
+	if got := resp.Entitlements["weekly_report_enabled"].LimitValue; got != true {
+		t.Fatalf("missing weekly report entitlement: %+v", resp.Entitlements)
+	}
+	if len(resp.Events) != 1 || resp.Events[0].EventType != "subscription_renewed" {
+		t.Fatalf("unexpected subscription events: %+v", resp.Events)
+	}
+	if resp.StoreManagement.Provider != "google_play" {
+		t.Fatalf("unexpected store management: %+v", resp.StoreManagement)
+	}
+}
+
+func TestStoreManagementInfoHandlesRevenueCatStoreProviders(t *testing.T) {
+	cases := map[string]string{
+		"revenuecat_play_store": "https://play.google.com/store/account/subscriptions",
+		"revenuecat_app_store":  "https://apps.apple.com/account/subscriptions",
+	}
+	for provider, wantURL := range cases {
+		t.Run(provider, func(t *testing.T) {
+			info := storeManagementInfo(&Subscription{Provider: provider})
+			if info.Provider != provider {
+				t.Fatalf("provider = %q, want %q", info.Provider, provider)
+			}
+			if info.ManageURL != wantURL {
+				t.Fatalf("manage URL = %q, want %q", info.ManageURL, wantURL)
+			}
+		})
 	}
 }
 
@@ -388,7 +630,7 @@ func TestServiceCurrentUsageSummaryCombinesQuotaUsageAndGrants(
 				Unit:      "activations",
 			},
 			{
-				UsageType: UsageVideoCallMinutes,
+				UsageType: UsageVideoCalls,
 				Quantity:  2,
 				Unit:      "calls",
 			},
@@ -422,7 +664,7 @@ func TestServiceCurrentUsageSummaryCombinesQuotaUsageAndGrants(
 	if camera.Remaining != 1 {
 		t.Fatalf("unexpected camera remaining quota: %+v", camera)
 	}
-	videoCalls, ok := resp.Quotas[UsageVideoCallMinutes]
+	videoCalls, ok := resp.Quotas[UsageVideoCalls]
 	if !ok {
 		t.Fatal("expected video_calls_per_day entitlement in usage quotas")
 	}
@@ -433,5 +675,153 @@ func TestServiceCurrentUsageSummaryCombinesQuotaUsageAndGrants(
 	}
 	if resp.TopUsage[0].UsageType != UsageAIMinutes {
 		t.Fatalf("want AI minutes as top usage, got %+v", resp.TopUsage)
+	}
+}
+
+func TestServiceRequireQuotaRejectsDepletedCareGroupQuota(t *testing.T) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-basic",
+				Code:          "basic_149k",
+				Name:          "Care Basic",
+				PriceVND:      149000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-basic": {
+				{
+					FeatureKey:  "video_calls_per_day",
+					LimitValue:  float64(5),
+					LimitUnit:   "calls",
+					ResetPeriod: "day",
+				},
+			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh me",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   2,
+			MemberCount:      2,
+		},
+		caredUserIDs: []string{
+			"00000000-0000-0000-0000-000000000111",
+			"00000000-0000-0000-0000-000000000222",
+		},
+		usageTotals: []UsageTotal{
+			{
+				UsageType: UsageVideoCalls,
+				Quantity:  5,
+				Unit:      "calls",
+			},
+		},
+	}
+
+	err := NewService(store).RequireQuota(
+		context.Background(),
+		QuotaCheckInput{
+			UserID:    "00000000-0000-0000-0000-000000000111",
+			UsageType: UsageVideoCalls,
+			Quantity:  1,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected depleted video call quota to fail")
+	}
+	quotaErr, ok := err.(*QuotaExceededError)
+	if !ok {
+		t.Fatalf("expected QuotaExceededError, got %T: %v", err, err)
+	}
+	if quotaErr.Code != "quota_exceeded" ||
+		quotaErr.UsageType != UsageVideoCalls ||
+		quotaErr.Remaining != 0 ||
+		quotaErr.Required != 1 ||
+		quotaErr.PlanCode != "basic_149k" ||
+		quotaErr.ResetPeriod != "day" {
+		t.Fatalf("unexpected quota error: %+v", quotaErr)
+	}
+}
+
+func TestServiceRecordBillableUsageChecksQuotaBeforeLedgerWrite(t *testing.T) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-basic",
+				Code:          "basic_149k",
+				Name:          "Care Basic",
+				PriceVND:      149000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-basic": {
+				{
+					FeatureKey:  "camera_activations_per_day",
+					LimitValue:  float64(3),
+					LimitUnit:   "activations",
+					ResetPeriod: "day",
+				},
+			},
+		},
+		usageTotals: []UsageTotal{
+			{
+				UsageType: UsageCameraActivations,
+				Quantity:  2,
+				Unit:      "activations",
+			},
+		},
+	}
+	svc := NewService(store)
+
+	record, err := svc.RecordBillableUsage(
+		context.Background(),
+		UsageRecordInput{
+			UserID:    "00000000-0000-0000-0000-000000000789",
+			UsageType: UsageCameraActivations,
+			Quantity:  1,
+			Unit:      "activations",
+			Source:    "agent",
+			SourceID:  "camera-enable-1",
+		},
+	)
+	if err != nil {
+		t.Fatalf("RecordBillableUsage() error: %v", err)
+	}
+	if record.UsageType != UsageCameraActivations {
+		t.Fatalf("unexpected usage record: %+v", record)
+	}
+	if len(store.records) != 1 {
+		t.Fatalf("want 1 stored record, got %d", len(store.records))
+	}
+
+	store.usageTotals = []UsageTotal{
+		{
+			UsageType: UsageCameraActivations,
+			Quantity:  3,
+			Unit:      "activations",
+		},
+	}
+	_, err = svc.RecordBillableUsage(
+		context.Background(),
+		UsageRecordInput{
+			UserID:    "00000000-0000-0000-0000-000000000789",
+			UsageType: UsageCameraActivations,
+			Quantity:  1,
+			Unit:      "activations",
+			Source:    "agent",
+			SourceID:  "camera-enable-2",
+		},
+	)
+	if err == nil {
+		t.Fatal("expected depleted camera quota to fail")
+	}
+	if len(store.records) != 1 {
+		t.Fatalf("depleted quota should not write ledger, got %d records", len(store.records))
 	}
 }

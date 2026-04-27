@@ -113,7 +113,13 @@ func main() {
 	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
 	billingService := billing.NewService(billing.NewPgxStore(pool))
-	billingHandler := billing.NewHandler(billingService)
+	billingHandler := billing.NewHandlerWithConfig(
+		billingService,
+		os.Getenv("REVENUECAT_WEBHOOK_AUTH"),
+		billing.RevenueCatConfig{
+			ProductPlanMap: os.Getenv("REVENUECAT_PRODUCT_PLAN_MAP"),
+		},
+	)
 
 	lkClient := lk.NewClient(
 		os.Getenv("LIVEKIT_URL"),
@@ -122,7 +128,7 @@ func main() {
 	)
 
 	chatHub := chat.NewHub()
-	callService := call.NewService(lkClient, pusher, chatHub)
+	callService := call.NewService(lkClient, pusher, chatHub, billingService)
 	callHandler := call.NewHandler(callService, userService)
 
 	chatService := chat.NewService(pool, chatHub, pusher)
@@ -164,7 +170,7 @@ func main() {
 
 	// Volunteer
 	volService := volunteer.NewService(
-		queries, rdb, lkClient, pusher,
+		queries, rdb, lkClient, pusher, billingService,
 	)
 	volHandler := volunteer.NewHandler(volService)
 
@@ -173,6 +179,7 @@ func main() {
 		medService, healthService, aptService,
 		emergService, musicService,
 		volService,
+		billingService,
 		queries,
 	)
 
@@ -229,6 +236,7 @@ func main() {
 
 			// My health (user's own data)
 			r.Route("/me", func(r chi.Router) {
+				r.Get("/billing-overview", billingHandler.CurrentBillingOverview)
 				r.Get("/subscription", billingHandler.CurrentSubscription)
 				r.Get("/entitlements", billingHandler.CurrentEntitlements)
 				r.Get("/usage", billingHandler.CurrentUsage)
@@ -266,11 +274,14 @@ func main() {
 	r.Route("/api/internal", func(r chi.Router) {
 		r.Use(middleware.InternalAuth(internalKey))
 		r.Post("/tool-call", toolHandler.HandleToolCall)
+		r.Post("/usage/check", billingHandler.CheckQuota)
 		r.Post("/usage/record", billingHandler.RecordUsage)
 		r.Post("/usage/session/start", billingHandler.StartUsageSession)
 		r.Post("/usage/session/commit", billingHandler.CommitUsageSession)
 		r.Post("/usage/grant", billingHandler.GrantUsageQuota)
 	})
+
+	r.Post("/api/webhooks/revenuecat", billingHandler.RevenueCatWebhook)
 
 	port := os.Getenv("PORT")
 	if port == "" {

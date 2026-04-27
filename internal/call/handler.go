@@ -2,8 +2,10 @@ package call
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/pkg/response"
@@ -29,6 +31,9 @@ func (h *Handler) GetToken(
 	userID := middleware.UserIDFromContext(r.Context())
 	token, err := h.service.GetUserToken(r.Context(), userID, "User")
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"token_failed",
@@ -112,6 +117,9 @@ func (h *Handler) CreateRoom(
 		r.Context(), caller, callee, req.CallType,
 	)
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"create_room_failed",
@@ -120,6 +128,25 @@ func (h *Handler) CreateRoom(
 		return
 	}
 	response.JSON(w, http.StatusOK, result)
+}
+
+func writeQuotaError(w http.ResponseWriter, err error) bool {
+	var quotaErr *billing.QuotaExceededError
+	if !errors.As(err, &quotaErr) {
+		return false
+	}
+	response.JSON(w, http.StatusPaymentRequired, map[string]any{
+		"error": map[string]any{
+			"code":         quotaErr.Code,
+			"message":      "Quota exceeded",
+			"usage_type":   quotaErr.UsageType,
+			"required":     quotaErr.Required,
+			"remaining":    quotaErr.Remaining,
+			"plan_code":    quotaErr.PlanCode,
+			"reset_period": quotaErr.ResetPeriod,
+		},
+	})
+	return true
 }
 
 type EndRoomRequest struct {

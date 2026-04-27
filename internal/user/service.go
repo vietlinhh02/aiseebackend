@@ -86,7 +86,59 @@ func (s *Service) JoinFamily(ctx context.Context, familyMemberID, code string) e
 		Relationship:     invite.Relationship,
 		IsPrimaryContact: false,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return s.ensureCareGroupLink(ctx, invite.UserID, familyMemberID, false)
+}
+
+func (s *Service) ensureCareGroupLink(
+	ctx context.Context,
+	caredUserID string,
+	familyMemberID string,
+	primary bool,
+) error {
+	role := "family"
+	if primary {
+		role = "billing_admin"
+	}
+	_, err := s.db.Exec(ctx, `
+		WITH existing_group AS (
+			SELECT id
+			FROM care_groups
+			WHERE owner_user_id = $1::uuid
+			  AND status = 'active'
+			ORDER BY created_at
+			LIMIT 1
+		),
+		created_group AS (
+			INSERT INTO care_groups (name, owner_user_id)
+			SELECT 'AiSee Care Group', $1::uuid
+			WHERE NOT EXISTS (SELECT 1 FROM existing_group)
+			RETURNING id
+		),
+		selected_group AS (
+			SELECT id FROM existing_group
+			UNION ALL
+			SELECT id FROM created_group
+			LIMIT 1
+		),
+		insert_cared AS (
+			INSERT INTO care_group_cared_users (care_group_id, user_id)
+			SELECT id, $1::uuid FROM selected_group
+			ON CONFLICT (care_group_id, user_id)
+			DO UPDATE SET deleted_at = NULL
+			RETURNING 1
+		)
+		INSERT INTO care_group_members (care_group_id, user_id, role)
+		SELECT id, $2::uuid, $3 FROM selected_group
+		ON CONFLICT (care_group_id, user_id)
+		DO UPDATE SET role = EXCLUDED.role, deleted_at = NULL
+	`, caredUserID, familyMemberID, role)
+	if err != nil {
+		return fmt.Errorf("ensure care group link: %w", err)
+	}
+	return nil
 }
 
 // normalizeVietnamese lowercases and strips Vietnamese

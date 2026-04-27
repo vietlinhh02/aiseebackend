@@ -51,3 +51,24 @@ func TestBillingMigrationMatchesCarePlanConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestCareGroupBillingMigrationBackfillsLegacyBillingRows(t *testing.T) {
+	sql, err := os.ReadFile("../../db/migrations/007_care_groups_billing.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	body := string(sql)
+
+	required := []string{
+		"UPDATE subscriptions s",
+		"SET care_group_id = ranked.care_group_id",
+		"AND s.care_group_id IS NULL",
+		"UPDATE subscription_events se",
+		"SET care_group_id = s.care_group_id",
+	}
+	for _, want := range required {
+		if !strings.Contains(body, want) {
+			t.Fatalf("care-group migration missing legacy backfill: %s", want)
+		}
+	}
+}

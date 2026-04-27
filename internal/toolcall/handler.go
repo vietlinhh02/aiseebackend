@@ -3,6 +3,7 @@ package toolcall
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/appointment"
+	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/call"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
@@ -39,7 +41,13 @@ type Handler struct {
 	emergency   *emergency.Service
 	music       *music.Service
 	volunteer   *volunteer.Service
+	billing     usageService
 	queries     *dbgen.Queries
+}
+
+type usageService interface {
+	RequireQuota(context.Context, billing.QuotaCheckInput) error
+	RecordUsage(context.Context, billing.UsageRecordInput) (billing.UsageRecord, error)
 }
 
 func NewHandler(
@@ -52,6 +60,7 @@ func NewHandler(
 	emergSvc *emergency.Service,
 	musicSvc *music.Service,
 	volSvc *volunteer.Service,
+	billingSvc usageService,
 	queries *dbgen.Queries,
 ) *Handler {
 	return &Handler{
@@ -64,6 +73,7 @@ func NewHandler(
 		emergency:   emergSvc,
 		music:       musicSvc,
 		volunteer:   volSvc,
+		billing:     billingSvc,
 		queries:     queries,
 	}
 }
@@ -90,6 +100,9 @@ func (h *Handler) HandleToolCall(
 	h.logAudit(r.Context(), req, result, err)
 
 	if err != nil {
+		if h.writeQuotaError(w, err) {
+			return
+		}
 		response.Err(
 			w, http.StatusBadRequest, "tool_error", err.Error(),
 		)
@@ -588,6 +601,11 @@ func (h *Handler) handlePlayMusic(
 		return nil, fmt.Errorf("query is required")
 	}
 
+	if err := h.requireQuota(
+		ctx, req.UserID, billing.UsageMusicSessions, 1,
+	); err != nil {
+		return nil, err
+	}
 	result, err := h.music.Search(ctx, query)
 	if err != nil {
 		return nil, err
@@ -604,6 +622,52 @@ func (h *Handler) handlePlayMusic(
 			},
 		},
 	}, nil
+}
+
+func (h *Handler) requireQuota(
+	ctx context.Context,
+	userID string,
+	usageType billing.UsageType,
+	quantity float64,
+) error {
+	if h.billing == nil {
+		return nil
+	}
+	return h.billing.RequireQuota(ctx, billing.QuotaCheckInput{
+		UserID:    userID,
+		UsageType: usageType,
+		Quantity:  quantity,
+	})
+}
+
+func (h *Handler) recordUsage(
+	ctx context.Context,
+	input billing.UsageRecordInput,
+) error {
+	if h.billing == nil {
+		return nil
+	}
+	_, err := h.billing.RecordUsage(ctx, input)
+	return err
+}
+
+func (h *Handler) writeQuotaError(w http.ResponseWriter, err error) bool {
+	var quotaErr *billing.QuotaExceededError
+	if !errors.As(err, &quotaErr) {
+		return false
+	}
+	response.JSON(w, http.StatusPaymentRequired, map[string]any{
+		"error": map[string]any{
+			"code":         quotaErr.Code,
+			"message":      "Quota exceeded",
+			"usage_type":   quotaErr.UsageType,
+			"required":     quotaErr.Required,
+			"remaining":    quotaErr.Remaining,
+			"plan_code":    quotaErr.PlanCode,
+			"reset_period": quotaErr.ResetPeriod,
+		},
+	})
+	return true
 }
 
 func (h *Handler) handleEscalateToVolunteer(

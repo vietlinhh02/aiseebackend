@@ -118,7 +118,7 @@ func (s *Service) Alert(
 			ApnsVoipToken: m.ApnsVoipToken,
 		}, push.Notification{
 			Title: "SOS - " + user.DisplayName,
-			Body:  "Can giup do khan cap!",
+			Body:  "Cần giúp đỡ khẩn cấp!",
 			Type:  "voip",
 			Data: map[string]string{
 				"type":        "emergency",
@@ -224,7 +224,7 @@ func (s *Service) Escalate(
 		ApnsVoipToken: target.ApnsVoipToken,
 	}, push.Notification{
 		Title: "SOS - " + caller.DisplayName,
-		Body:  "Can giup do khan cap!",
+		Body:  "Cần giúp đỡ khẩn cấp!",
 		Type:  "voip",
 		Data: map[string]string{
 			"type":        "escalation",

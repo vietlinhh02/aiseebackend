@@ -8,6 +8,7 @@ const (
 	UsageAIMinutes            UsageType = "ai_minutes"
 	UsageCameraActivations    UsageType = "camera_activations"
 	UsageVoiceCallMinutes     UsageType = "voice_call_minutes"
+	UsageVideoCalls           UsageType = "video_calls"
 	UsageVideoCallMinutes     UsageType = "video_call_minutes"
 	UsageMusicSessions        UsageType = "music_sessions"
 	UsageMusicMinutes         UsageType = "music_minutes"
@@ -42,6 +43,36 @@ type UsageRecord struct {
 	EndedAt   *time.Time     `json:"ended_at,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
+}
+
+type QuotaCheckInput struct {
+	UserID    string    `json:"user_id"`
+	UsageType UsageType `json:"usage_type"`
+	Quantity  float64   `json:"quantity"`
+}
+
+type QuotaDecision struct {
+	Allowed     bool        `json:"allowed"`
+	UsageType   UsageType   `json:"usage_type"`
+	Required    float64     `json:"required"`
+	Remaining   float64     `json:"remaining"`
+	Unlimited   bool        `json:"unlimited"`
+	PlanCode    string      `json:"plan_code,omitempty"`
+	ResetPeriod string      `json:"reset_period,omitempty"`
+	Quota       *UsageQuota `json:"quota,omitempty"`
+}
+
+type QuotaExceededError struct {
+	Code        string    `json:"code"`
+	UsageType   UsageType `json:"usage_type"`
+	Required    float64   `json:"required"`
+	Remaining   float64   `json:"remaining"`
+	PlanCode    string    `json:"plan_code,omitempty"`
+	ResetPeriod string    `json:"reset_period,omitempty"`
+}
+
+func (e *QuotaExceededError) Error() string {
+	return "quota_exceeded"
 }
 
 type UsageSessionInput struct {
@@ -137,6 +168,16 @@ type UsageResponse struct {
 	AsOf        time.Time                `json:"as_of"`
 }
 
+type CareGroupSummary struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	OwnerUserID      string `json:"owner_user_id,omitempty"`
+	CurrentUserRole  string `json:"current_user_role"`
+	CanManageBilling bool   `json:"can_manage_billing"`
+	CaredUserCount   int    `json:"cared_user_count"`
+	MemberCount      int    `json:"member_count"`
+}
+
 type Plan struct {
 	ID            string        `json:"id,omitempty"`
 	Code          string        `json:"code"`
@@ -175,6 +216,7 @@ type EntitlementValue struct {
 type Subscription struct {
 	ID                     string         `json:"id"`
 	UserID                 string         `json:"user_id,omitempty"`
+	CareGroupID            string         `json:"care_group_id,omitempty"`
 	PlanID                 string         `json:"plan_id,omitempty"`
 	PlanCode               string         `json:"plan_code"`
 	PlanName               string         `json:"plan_name,omitempty"`
@@ -197,6 +239,60 @@ type EntitlementsResponse struct {
 	Plan         PlanSummary                 `json:"plan"`
 	Entitlements map[string]EntitlementValue `json:"entitlements"`
 	AsOf         time.Time                   `json:"as_of"`
+}
+
+type SubscriptionEvent struct {
+	ID              string         `json:"id"`
+	SubscriptionID  string         `json:"subscription_id,omitempty"`
+	CareGroupID     string         `json:"care_group_id,omitempty"`
+	UserID          string         `json:"user_id,omitempty"`
+	EventType       string         `json:"event_type"`
+	Provider        string         `json:"provider,omitempty"`
+	ProviderEventID string         `json:"provider_event_id,omitempty"`
+	Payload         map[string]any `json:"-"`
+	OccurredAt      time.Time      `json:"occurred_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
+type ProviderSubscriptionInput struct {
+	UserID                 string         `json:"user_id"`
+	CareGroupID            string         `json:"care_group_id,omitempty"`
+	PlanID                 string         `json:"plan_id"`
+	Status                 string         `json:"status"`
+	CurrentPeriodStart     *time.Time     `json:"current_period_start,omitempty"`
+	CurrentPeriodEnd       *time.Time     `json:"current_period_end,omitempty"`
+	CancelAtPeriodEnd      bool           `json:"cancel_at_period_end"`
+	Provider               string         `json:"provider"`
+	ProviderSubscriptionID string         `json:"provider_subscription_id"`
+	Metadata               map[string]any `json:"metadata,omitempty"`
+}
+
+type SubscriptionEventInput struct {
+	SubscriptionID  string         `json:"subscription_id,omitempty"`
+	CareGroupID     string         `json:"care_group_id,omitempty"`
+	UserID          string         `json:"user_id,omitempty"`
+	EventType       string         `json:"event_type"`
+	Provider        string         `json:"provider,omitempty"`
+	ProviderEventID string         `json:"provider_event_id,omitempty"`
+	Payload         map[string]any `json:"payload,omitempty"`
+	OccurredAt      time.Time      `json:"occurred_at"`
+}
+
+type StoreManagementInfo struct {
+	Provider     string `json:"provider,omitempty"`
+	ManageURL    string `json:"manage_url,omitempty"`
+	Instructions string `json:"instructions"`
+}
+
+type BillingOverviewResponse struct {
+	CareGroup       CareGroupSummary            `json:"care_group"`
+	Subscription    *Subscription               `json:"subscription"`
+	EffectivePlan   PlanSummary                 `json:"effective_plan"`
+	Entitlements    map[string]EntitlementValue `json:"entitlements"`
+	Usage           UsageResponse               `json:"usage"`
+	Events          []SubscriptionEvent         `json:"events"`
+	StoreManagement StoreManagementInfo         `json:"store_management"`
+	AsOf            time.Time                   `json:"as_of"`
 }
 
 func summarizePlan(plan Plan) PlanSummary {

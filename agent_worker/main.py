@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from livekit import rtc
 from livekit.agents import AgentSession, WorkerOptions, cli, vad as vad_mod
@@ -149,9 +150,11 @@ async def entrypoint(ctx):
     first_start = True
     vad_instance = ctx.proc.userdata["vad"]
     last_resumption_handle: str | None = None
+    ai_usage_started_at: str | None = None
+    ai_usage_source_id = ctx.room.name
 
     async def _start_session():
-        nonlocal active_session, first_start
+        nonlocal active_session, first_start, ai_usage_started_at
         if active_session is not None:
             return
 
@@ -220,6 +223,20 @@ async def entrypoint(ctx):
                 ),
             ),
         )
+        ai_usage_started_at = datetime.now(timezone.utc).isoformat()
+        if user_id:
+            try:
+                await backend.start_usage_session(
+                    user_id,
+                    "ai_minutes",
+                    "minutes",
+                    "agent",
+                    ai_usage_source_id,
+                    ai_usage_started_at,
+                    {"room_name": ctx.room.name},
+                )
+            except Exception as exc:
+                logger.warning("start ai usage session failed: %s", exc)
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
@@ -227,10 +244,11 @@ async def entrypoint(ctx):
         )
 
     async def _stop_session():
-        nonlocal active_session, last_resumption_handle
+        nonlocal active_session, last_resumption_handle, ai_usage_started_at
         if active_session is None:
             return
         logger.info("closing Gemini session")
+        ended_at = datetime.now(timezone.utc).isoformat()
 
         # Capture resumption handle before closing.
         try:
@@ -254,6 +272,22 @@ async def entrypoint(ctx):
         await _publish_state(local, 'idle')
         await active_session.aclose()
         active_session = None
+        if user_id and ai_usage_started_at:
+            try:
+                await backend.commit_usage_session(
+                    user_id,
+                    "ai_minutes",
+                    "minutes",
+                    "agent",
+                    ai_usage_source_id,
+                    ai_usage_started_at,
+                    ended_at,
+                    {"room_name": ctx.room.name},
+                )
+            except Exception as exc:
+                logger.warning("commit ai usage session failed: %s", exc)
+            finally:
+                ai_usage_started_at = None
 
         for pub in list(local.track_publications.values()):
             if pub.track and pub.track.kind == rtc.TrackKind.KIND_AUDIO:

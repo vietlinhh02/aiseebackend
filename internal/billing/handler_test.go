@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,16 +15,23 @@ import (
 
 type fakeReadService struct {
 	plans              []Plan
+	billingOverviewID  string
+	billingOverview    BillingOverviewResponse
 	subscriptionUserID string
 	entitlementsUserID string
 	subscription       SubscriptionResponse
 	entitlements       EntitlementsResponse
 	usageUserID        string
 	usage              UsageResponse
+	quotaInput         QuotaCheckInput
+	quotaDecision      QuotaDecision
 	recordInput        UsageRecordInput
 	sessionInput       UsageSessionInput
 	commitInput        CommitUsageSessionInput
 	grantInput         UsageGrantInput
+	revenueCatPayload  RevenueCatWebhookPayload
+	revenueCatConfig   RevenueCatConfig
+	revenueCatResult   RevenueCatSyncResult
 }
 
 func (f *fakeReadService) ListPlans(
@@ -38,6 +46,14 @@ func (f *fakeReadService) CurrentSubscription(
 ) (SubscriptionResponse, error) {
 	f.subscriptionUserID = userID
 	return f.subscription, nil
+}
+
+func (f *fakeReadService) CurrentBillingOverview(
+	_ context.Context,
+	userID string,
+) (BillingOverviewResponse, error) {
+	f.billingOverviewID = userID
+	return f.billingOverview, nil
 }
 
 func (f *fakeReadService) CurrentEntitlements(
@@ -56,6 +72,21 @@ func (f *fakeReadService) CurrentUsage(
 	return f.usage, nil
 }
 
+func (f *fakeReadService) CheckQuota(
+	_ context.Context,
+	input QuotaCheckInput,
+) (QuotaDecision, error) {
+	f.quotaInput = input
+	if f.quotaDecision.UsageType == "" {
+		f.quotaDecision = QuotaDecision{
+			Allowed:   true,
+			UsageType: input.UsageType,
+			Required:  input.Quantity,
+		}
+	}
+	return f.quotaDecision, nil
+}
+
 func (f *fakeReadService) RecordUsage(
 	_ context.Context,
 	input UsageRecordInput,
@@ -70,6 +101,13 @@ func (f *fakeReadService) RecordUsage(
 		Source:    input.Source,
 		SourceID:  input.SourceID,
 	}, nil
+}
+
+func (f *fakeReadService) RecordBillableUsage(
+	ctx context.Context,
+	input UsageRecordInput,
+) (UsageRecord, error) {
+	return f.RecordUsage(ctx, input)
 }
 
 func (f *fakeReadService) StartUsageSession(
@@ -121,6 +159,19 @@ func (f *fakeReadService) GrantUsageQuota(
 	}, nil
 }
 
+func (f *fakeReadService) SyncRevenueCatWebhookWithConfig(
+	_ context.Context,
+	payload RevenueCatWebhookPayload,
+	cfg RevenueCatConfig,
+) (RevenueCatSyncResult, error) {
+	f.revenueCatPayload = payload
+	f.revenueCatConfig = cfg
+	if f.revenueCatResult.Event.ID == "" {
+		f.revenueCatResult.Event.ID = "event-1"
+	}
+	return f.revenueCatResult, nil
+}
+
 func TestListPlansReturnsBackendDefinedPlanEntitlements(
 	t *testing.T,
 ) {
@@ -168,6 +219,137 @@ func TestListPlansReturnsBackendDefinedPlanEntitlements(
 	}
 	if got := resp.Plans[0].Entitlements[0].FeatureKey; got != "ai_minutes_per_month" {
 		t.Errorf("unexpected entitlement key %q", got)
+	}
+}
+
+func TestCurrentBillingOverviewUsesAuthenticatedUserAndReturnsCareGroup(
+	t *testing.T,
+) {
+	now := time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC)
+	svc := &fakeReadService{
+		billingOverview: BillingOverviewResponse{
+			CareGroup: CareGroupSummary{
+				ID:               "group-1",
+				Name:             "Gia dinh me",
+				CurrentUserRole:  "billing_admin",
+				CanManageBilling: true,
+				CaredUserCount:   2,
+				MemberCount:      3,
+			},
+			Subscription: &Subscription{
+				ID:       "sub-1",
+				PlanCode: "plus_399k",
+				Status:   "active",
+			},
+			EffectivePlan: PlanSummary{
+				Code: "plus_399k",
+				Name: "Care Plus",
+			},
+			Entitlements: map[string]EntitlementValue{
+				"weekly_report_enabled": {LimitValue: true},
+			},
+			Usage: UsageResponse{
+				Plan: PlanSummary{Code: "plus_399k"},
+				Quotas: map[UsageType]UsageQuota{
+					UsageAIMinutes: {
+						UsageType: UsageAIMinutes,
+						Limit:     600,
+						Used:      480,
+						Remaining: 120,
+					},
+				},
+			},
+			StoreManagement: StoreManagementInfo{
+				Provider:     "google_play",
+				Instructions: "Quản lý gói trong Google Play.",
+			},
+			AsOf: now,
+		},
+	}
+	h := NewHandler(svc)
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/me/billing-overview", nil,
+	)
+	req = req.WithContext(
+		middleware.WithUserID(
+			req.Context(),
+			"00000000-0000-0000-0000-000000000456",
+		),
+	)
+	rr := httptest.NewRecorder()
+	h.CurrentBillingOverview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.billingOverviewID != "00000000-0000-0000-0000-000000000456" {
+		t.Fatalf("handler used user id %q", svc.billingOverviewID)
+	}
+
+	var resp BillingOverviewResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.CareGroup.ID != "group-1" || !resp.CareGroup.CanManageBilling {
+		t.Fatalf("unexpected care group: %+v", resp.CareGroup)
+	}
+	if resp.EffectivePlan.Code != "plus_399k" {
+		t.Fatalf("unexpected effective plan: %+v", resp.EffectivePlan)
+	}
+	if got := resp.Usage.Quotas[UsageAIMinutes].Remaining; got != 120 {
+		t.Fatalf("unexpected remaining AI quota %.2f", got)
+	}
+}
+
+func TestCurrentBillingOverviewOmitsRawSubscriptionEventPayload(
+	t *testing.T,
+) {
+	svc := &fakeReadService{
+		billingOverview: BillingOverviewResponse{
+			CareGroup: CareGroupSummary{
+				ID:              "group-1",
+				Name:            "Gia dinh me",
+				CurrentUserRole: "family",
+			},
+			EffectivePlan: PlanSummary{Code: "free", Name: "Free / Essential"},
+			Entitlements:  map[string]EntitlementValue{},
+			Usage: UsageResponse{
+				Plan:   PlanSummary{Code: "free"},
+				Quotas: map[UsageType]UsageQuota{},
+			},
+			Events: []SubscriptionEvent{
+				{
+					ID:        "event-1",
+					EventType: "provider_webhook",
+					Provider:  "google_play",
+					Payload: map[string]any{
+						"purchase_token": "secret-token",
+					},
+				},
+			},
+		},
+	}
+	h := NewHandler(svc)
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/me/billing-overview", nil,
+	)
+	req = req.WithContext(
+		middleware.WithUserID(
+			req.Context(),
+			"00000000-0000-0000-0000-000000000456",
+		),
+	)
+	rr := httptest.NewRecorder()
+
+	h.CurrentBillingOverview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "purchase_token") || strings.Contains(body, "secret-token") {
+		t.Fatalf("response leaked raw provider payload: %s", body)
 	}
 }
 
@@ -329,5 +511,83 @@ func TestRecordUsageDecodesInternalPayload(t *testing.T) {
 	if svc.recordInput.UsageType != UsageCameraActivations ||
 		svc.recordInput.SourceID != "tool-call-1" {
 		t.Fatalf("unexpected record input: %+v", svc.recordInput)
+	}
+}
+
+func TestRevenueCatWebhookRequiresConfiguredAuthorization(t *testing.T) {
+	h := NewHandlerWithConfig(&fakeReadService{}, "secret-token", RevenueCatConfig{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/webhooks/revenuecat",
+		strings.NewReader(`{"event":{"id":"evt-1"}}`),
+	)
+	rr := httptest.NewRecorder()
+
+	h.RevenueCatWebhook(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRevenueCatWebhookDecodesPayloadAndConfig(t *testing.T) {
+	svc := &fakeReadService{}
+	h := NewHandlerWithConfig(
+		svc,
+		"secret-token",
+		RevenueCatConfig{
+			ProductPlanMap: "rc_basic=basic_149k",
+		},
+	)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/webhooks/revenuecat",
+		strings.NewReader(`{
+			"event": {
+				"id": "evt-1",
+				"type": "INITIAL_PURCHASE",
+				"app_user_id": "00000000-0000-0000-0000-000000000123",
+				"product_id": "rc_basic"
+			}
+		}`),
+	)
+	req.Header.Set("Authorization", "secret-token")
+	rr := httptest.NewRecorder()
+
+	h.RevenueCatWebhook(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.revenueCatPayload.Event.ProductID != "rc_basic" {
+		t.Fatalf("product id = %q", svc.revenueCatPayload.Event.ProductID)
+	}
+	if svc.revenueCatConfig.ProductPlanMap != "rc_basic=basic_149k" {
+		t.Fatalf("config = %+v", svc.revenueCatConfig)
+	}
+}
+
+func TestRevenueCatWebhookAcceptsBearerAuthorizationVariant(t *testing.T) {
+	svc := &fakeReadService{}
+	h := NewHandlerWithConfig(svc, "secret-token", RevenueCatConfig{})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/webhooks/revenuecat",
+		strings.NewReader(`{
+			"event": {
+				"id": "evt-1",
+				"type": "INITIAL_PURCHASE",
+				"app_user_id": "00000000-0000-0000-0000-000000000123",
+				"product_id": "aisee_basic_149k_monthly"
+			}
+		}`),
+	)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rr := httptest.NewRecorder()
+
+	h.RevenueCatWebhook(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

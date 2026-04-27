@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
+	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
@@ -67,10 +68,16 @@ type MatchStatus struct {
 // Service handles volunteer registration, availability,
 // matching, and rating.
 type Service struct {
-	q      Querier
-	rdb    *redis.Client
-	lk     *lk.Client
-	pusher *push.Pusher
+	q       Querier
+	rdb     *redis.Client
+	lk      *lk.Client
+	pusher  *push.Pusher
+	billing usageService
+}
+
+type usageService interface {
+	RequireQuota(context.Context, billing.QuotaCheckInput) error
+	RecordUsage(context.Context, billing.UsageRecordInput) (billing.UsageRecord, error)
 }
 
 // NewService creates a volunteer Service.
@@ -79,12 +86,18 @@ func NewService(
 	rdb *redis.Client,
 	lkClient *lk.Client,
 	pusher *push.Pusher,
+	billingSvc ...usageService,
 ) *Service {
+	var usage usageService
+	if len(billingSvc) > 0 {
+		usage = billingSvc[0]
+	}
 	return &Service{
-		q:      q,
-		rdb:    rdb,
-		lk:     lkClient,
-		pusher: pusher,
+		q:       q,
+		rdb:     rdb,
+		lk:      lkClient,
+		pusher:  pusher,
+		billing: usage,
 	}
 }
 
@@ -170,6 +183,16 @@ func (s *Service) SetAvailability(
 func (s *Service) StartMatch(
 	ctx context.Context, userID string,
 ) (MatchResult, error) {
+	if s.billing != nil {
+		if err := s.billing.RequireQuota(ctx, billing.QuotaCheckInput{
+			UserID:    userID,
+			UsageType: billing.UsageVolunteerMatches,
+			Quantity:  1,
+		}); err != nil {
+			return MatchResult{}, err
+		}
+	}
+
 	matchID := uuid.New().String()
 	key := "match:" + matchID
 
@@ -187,6 +210,22 @@ func (s *Service) StartMatch(
 		return MatchResult{}, fmt.Errorf(
 			"redis expire: %w", err,
 		)
+	}
+
+	if s.billing != nil {
+		if _, err := s.billing.RecordUsage(ctx, billing.UsageRecordInput{
+			UserID:    userID,
+			UsageType: billing.UsageVolunteerMatches,
+			Quantity:  1,
+			Unit:      "matches",
+			Source:    "volunteer_match",
+			SourceID:  matchID,
+			Metadata: map[string]any{
+				"match_id": matchID,
+			},
+		}); err != nil {
+			return MatchResult{}, fmt.Errorf("record volunteer usage: %w", err)
+		}
 	}
 
 	go s.matchLoop(userID, matchID)
@@ -257,7 +296,7 @@ func (s *Service) matchLoop(userID, matchID string) {
 			ApnsVoipToken: c.ApnsVoipToken,
 		}, push.Notification{
 			Title: "AiSee - " + user.DisplayName,
-			Body:  "Can giup do tu nguoi khuyet tat!",
+			Body:  "Cần giúp đỡ từ người khiếm thị!",
 			Type:  "voip",
 			Data: map[string]string{
 				"type":        "volunteer_match",

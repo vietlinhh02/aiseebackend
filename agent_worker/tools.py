@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 
 from livekit import rtc
 from livekit.agents import Agent, function_tool
@@ -81,13 +82,27 @@ class AiSeeAgent(Agent):
         self, reason: str = "User requested",
     ) -> dict:
         """Enable camera to see through user's phone."""
+        source_id = f"camera-{uuid.uuid4()}"
         try:
+            await self._backend.check_quota(
+                self._uid(), "camera_activations", 1,
+            )
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
                 method='enable_camera',
                 payload='{}',
             )
-            return json.loads(response)
+            result = json.loads(response)
+            await self._backend.record_usage(
+                self._uid(),
+                "camera_activations",
+                1,
+                "activations",
+                "agent",
+                source_id,
+                {"reason": reason},
+            )
+            return result
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
@@ -287,6 +302,15 @@ class AiSeeAgent(Agent):
                         play_action.get("params", {}),
                     ),
                 )
+                await self._backend.record_usage(
+                    self._uid(),
+                    "music_sessions",
+                    1,
+                    "sessions",
+                    "agent",
+                    f"music-{uuid.uuid4()}",
+                    {"query": query, "title": result.get("title", "")},
+                )
             except Exception as exc:
                 logger.warning(
                     "play_audio RPC failed: %s", exc,
@@ -311,7 +335,11 @@ class AiSeeAgent(Agent):
     @function_tool()
     async def navigate_to(self, destination: str) -> dict:
         """Mo ban do va chi duong den dia diem."""
+        source_id = f"navigation-{uuid.uuid4()}"
         try:
+            await self._backend.check_quota(
+                self._uid(), "navigation_sessions", 1,
+            )
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
                 method='open_maps',
@@ -319,7 +347,17 @@ class AiSeeAgent(Agent):
                     {"destination": destination},
                 ),
             )
-            return json.loads(response)
+            result = json.loads(response)
+            await self._backend.record_usage(
+                self._uid(),
+                "navigation_sessions",
+                1,
+                "sessions",
+                "agent",
+                source_id,
+                {"destination": destination},
+            )
+            return result
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
