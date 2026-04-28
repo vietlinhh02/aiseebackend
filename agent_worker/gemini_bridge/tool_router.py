@@ -156,7 +156,7 @@ class ToolRouter:
         reason = args.get("reason", "User requested")
         source_id = f"camera-{uuid.uuid4()}"
         await self.backend.check_quota(self._uid(), "camera_activations", 1)
-        result = await self._device_request("enable_camera", {}, timeout=10.0)
+        result = await self._device_request("enable_camera", {}, timeout=8.0)
         await self.backend.record_usage(
             self._uid(),
             "camera_activations",
@@ -169,7 +169,7 @@ class ToolRouter:
         return result
 
     async def _deactivate_camera(self, args: dict[str, Any]) -> dict[str, Any]:
-        return await self._device_request("disable_camera", {}, timeout=10.0)
+        return await self._device_request("disable_camera", {}, timeout=5.0)
 
     async def _backend_with_schedule_action(
         self,
