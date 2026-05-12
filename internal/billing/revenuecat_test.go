@@ -250,6 +250,73 @@ func TestSyncRevenueCatWebhookIgnoresTransferEventButRecordsIt(t *testing.T) {
 	}
 }
 
+func TestSyncRevenueCatWebhookRecordsBillingTransactionAndDedupesEvent(t *testing.T) {
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	store := revenueCatTestStore()
+	svc := NewService(store)
+	payload := RevenueCatWebhookPayload{
+		Event: RevenueCatEvent{
+			ID:                    "evt-renewal",
+			Type:                  "RENEWAL",
+			AppUserID:             "00000000-0000-0000-0000-000000000123",
+			ProductID:             "aisee_plus_399k_monthly",
+			TransactionID:         "txn-renewal-1",
+			OriginalTransactionID: "orig-renewal-1",
+			Store:                 "PLAY_STORE",
+			EventTimestampMS:      now.UnixMilli(),
+			PurchasedAtMS:         now.Add(-30 * 24 * time.Hour).UnixMilli(),
+			ExpirationAtMS:        ptrInt64(now.Add(30 * 24 * time.Hour).UnixMilli()),
+			SubscriberAttributes: map[string]RevenueCatSubscriberAttribute{
+				"care_group_id": {Value: "group-1"},
+			},
+		},
+	}
+
+	result, err := svc.SyncRevenueCatWebhook(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("SyncRevenueCatWebhook() error: %v", err)
+	}
+	if result.Transaction == nil {
+		t.Fatal("expected billing transaction")
+	}
+	if result.Transaction.Status != "renewal" {
+		t.Fatalf("transaction status = %q", result.Transaction.Status)
+	}
+	if result.Transaction.Amount != 399000 || result.Transaction.Currency != "VND" {
+		t.Fatalf("unexpected transaction amount: %+v", result.Transaction)
+	}
+	if len(store.billingTransactionInputs) != 1 {
+		t.Fatalf("want one billing transaction write, got %d", len(store.billingTransactionInputs))
+	}
+	tx := store.billingTransactionInputs[0]
+	if tx.ProviderEventID != "evt-renewal" {
+		t.Fatalf("provider event id = %q", tx.ProviderEventID)
+	}
+	if tx.PlanID != "plan-plus" {
+		t.Fatalf("plan id = %q", tx.PlanID)
+	}
+	if tx.SubscriptionID == "" {
+		t.Fatal("expected subscription id on billing transaction")
+	}
+	if len(store.subscriptionEventInputs) != 1 {
+		t.Fatalf("want one subscription event write, got %d", len(store.subscriptionEventInputs))
+	}
+
+	second, err := svc.SyncRevenueCatWebhook(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("second SyncRevenueCatWebhook() error: %v", err)
+	}
+	if second.Transaction == nil {
+		t.Fatal("expected deduped billing transaction on replay")
+	}
+	if len(store.billingTransactionInputs) != 1 {
+		t.Fatalf("want deduped billing transaction writes, got %d", len(store.billingTransactionInputs))
+	}
+	if len(store.subscriptionEventInputs) != 1 {
+		t.Fatalf("want deduped subscription event writes, got %d", len(store.subscriptionEventInputs))
+	}
+}
+
 func ptrInt64(v int64) *int64 {
 	return &v
 }

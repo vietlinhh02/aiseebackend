@@ -9,15 +9,21 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
 type Handler struct {
-	service *Service
+	service  *Service
+	tracking *tracking.Service
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func NewHandlerWithTracking(service *Service, trackingService *tracking.Service) *Handler {
+	return &Handler{service: service, tracking: trackingService}
 }
 
 func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +43,34 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		response.Err(w, http.StatusInternalServerError, "session_create_failed", "failed to create assistant session")
 		return
 	}
+	h.track(r.Context(), userID, "ai_session_created", descriptor.SessionID, map[string]any{
+		"role":         middleware.RoleFromContext(r.Context()),
+		"audio_input":  descriptor.AudioInput.Encoding,
+		"audio_output": descriptor.AudioOutput.Encoding,
+		"camera":       descriptor.Camera.Encoding,
+	})
 
 	response.JSON(w, http.StatusOK, descriptor)
+}
+
+func (h *Handler) track(
+	ctx context.Context,
+	userID string,
+	eventType string,
+	sourceID string,
+	metadata map[string]any,
+) {
+	if h.tracking == nil {
+		return
+	}
+	_, _ = h.tracking.RecordEvent(ctx, tracking.EventInput{
+		UserID:    userID,
+		EventType: eventType,
+		Category:  "ai_ops",
+		Source:    "assistant_api",
+		SourceID:  sourceID,
+		Metadata:  metadata,
+	})
 }
 
 func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {

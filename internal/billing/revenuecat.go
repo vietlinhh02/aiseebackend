@@ -41,10 +41,11 @@ type RevenueCatSubscriberAttribute struct {
 }
 
 type RevenueCatSyncResult struct {
-	Event        SubscriptionEvent `json:"event"`
-	Subscription *Subscription     `json:"subscription,omitempty"`
-	PlanCode     string            `json:"plan_code,omitempty"`
-	Ignored      bool              `json:"ignored"`
+	Event        SubscriptionEvent   `json:"event"`
+	Transaction  *BillingTransaction `json:"transaction,omitempty"`
+	Subscription *Subscription       `json:"subscription,omitempty"`
+	PlanCode     string              `json:"plan_code,omitempty"`
+	Ignored      bool                `json:"ignored"`
 }
 
 func (cfg RevenueCatConfig) PlanCodeForProduct(productID string) string {
@@ -93,7 +94,10 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 	occurredAt := revenueCatTime(event.EventTimestampMS, time.Now().UTC())
 	result := RevenueCatSyncResult{Ignored: revenueCatEventDoesNotChangeSubscription(event.Type)}
 	var sub *Subscription
+	var plan *Plan
+	var careGroupID string
 	var planCode string
+	sanitizedPayload := sanitizedRevenueCatPayload(payload)
 
 	if !result.Ignored {
 		planCode = cfg.PlanCodeForProduct(event.ProductID)
@@ -102,11 +106,12 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 				"unmapped revenuecat product_id: %s", event.ProductID,
 			)
 		}
-		plan, err := s.store.PlanByCode(ctx, planCode)
+		resolvedPlan, err := s.store.PlanByCode(ctx, planCode)
 		if err != nil {
 			return RevenueCatSyncResult{}, fmt.Errorf("revenuecat plan lookup: %w", err)
 		}
-		careGroupID := revenueCatCareGroupID(event)
+		plan = &resolvedPlan
+		careGroupID = revenueCatCareGroupID(event)
 		if careGroupID == "" {
 			group, err := s.store.DefaultCareGroup(ctx, event.AppUserID)
 			if err != nil {
@@ -163,13 +168,44 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 		}
 	}
 
+	transactionInput := BillingTransactionInput{
+		UserID:          event.AppUserID,
+		Provider:        provider,
+		ProviderEventID: event.ID,
+		Status:          revenueCatTransactionStatus(event.Type),
+		Amount:          revenueCatTransactionAmount(event.Type, plan),
+		Currency:        revenueCatTransactionCurrency(plan),
+		OccurredAt:      occurredAt,
+		Payload:         sanitizedPayload,
+	}
+	if careGroupID != "" {
+		transactionInput.CareGroupID = careGroupID
+	}
+	if sub != nil {
+		transactionInput.SubscriptionID = sub.ID
+		if transactionInput.CareGroupID == "" {
+			transactionInput.CareGroupID = sub.CareGroupID
+		}
+		if transactionInput.PlanID == "" {
+			transactionInput.PlanID = sub.PlanID
+		}
+	}
+	if plan != nil {
+		transactionInput.PlanID = plan.ID
+	}
+	recordedTransaction, err := s.store.InsertBillingTransaction(ctx, transactionInput)
+	if err != nil {
+		return RevenueCatSyncResult{}, fmt.Errorf("revenuecat record transaction: %w", err)
+	}
+	result.Transaction = &recordedTransaction
+
 	eventInput := SubscriptionEventInput{
 		EventType:       "revenuecat_" + strings.ToLower(event.Type),
 		Provider:        provider,
 		ProviderEventID: event.ID,
 		UserID:          event.AppUserID,
 		OccurredAt:      occurredAt,
-		Payload:         sanitizedRevenueCatPayload(payload),
+		Payload:         sanitizedPayload,
 	}
 	if sub != nil {
 		eventInput.SubscriptionID = sub.ID
@@ -312,6 +348,31 @@ func revenueCatTime(ms int64, fallback time.Time) time.Time {
 		return fallback
 	}
 	return *t
+}
+
+func revenueCatTransactionStatus(eventType string) string {
+	return strings.ToLower(strings.TrimSpace(eventType))
+}
+
+func revenueCatTransactionAmount(eventType string, plan *Plan) float64 {
+	if plan == nil {
+		return 0
+	}
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "INITIAL_PURCHASE", "RENEWAL":
+		return float64(plan.PriceVND)
+	case "REFUND":
+		return -float64(plan.PriceVND)
+	default:
+		return 0
+	}
+}
+
+func revenueCatTransactionCurrency(plan *Plan) string {
+	if plan != nil {
+		return "VND"
+	}
+	return "VND"
 }
 
 func sanitizedRevenueCatPayload(payload RevenueCatWebhookPayload) map[string]any {

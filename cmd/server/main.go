@@ -11,11 +11,13 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/team-dang/aiseebackend/internal/admin"
 	"github.com/team-dang/aiseebackend/internal/appointment"
 	"github.com/team-dang/aiseebackend/internal/assistant"
 	"github.com/team-dang/aiseebackend/internal/auth"
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/call"
+	"github.com/team-dang/aiseebackend/internal/care"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dashboard"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
@@ -25,6 +27,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/internal/upload"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/internal/volunteer"
@@ -112,17 +115,19 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	assistantBridge := assistant.NewWebSocketBridge(os.Getenv("ASSISTANT_BRIDGE_URL"))
 	assistantService := assistant.NewServiceWithBridge(jwtSecret, assistantBridge)
-	assistantHandler := assistant.NewHandler(assistantService)
+	trackingService := tracking.NewService(tracking.NewPgxStore(pool))
+	assistantHandler := assistant.NewHandlerWithTracking(assistantService, trackingService)
 
 	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
 	billingService := billing.NewService(billing.NewPgxStore(pool))
-	billingHandler := billing.NewHandlerWithConfig(
+	billingHandler := billing.NewHandlerWithConfigAndTracking(
 		billingService,
 		os.Getenv("REVENUECAT_WEBHOOK_AUTH"),
 		billing.RevenueCatConfig{
 			ProductPlanMap: os.Getenv("REVENUECAT_PRODUCT_PLAN_MAP"),
 		},
+		trackingService,
 	)
 
 	lkClient := lk.NewClient(
@@ -171,6 +176,8 @@ func main() {
 	dashService := dashboard.NewService(queries)
 	dashHandler := dashboard.NewHandler(dashService, userService)
 	meHandler := dashboard.NewMeHandler(dashService)
+	careService := care.NewService(care.NewStore(pool), billingService)
+	careHandler := care.NewHandler(careService, userService)
 
 	// Volunteer
 	volService := volunteer.NewService(
@@ -186,6 +193,11 @@ func main() {
 		billingService,
 		queries,
 	)
+
+	adminStore := admin.NewStore(pool)
+	adminService := admin.NewService(adminStore)
+	adminHandler := admin.NewHandler(adminService)
+	trackingHandler := tracking.NewHandler(trackingService)
 
 	// Router
 	r := chi.NewRouter()
@@ -262,6 +274,14 @@ func main() {
 				r.Post("/medications", dashHandler.CreateMedication)
 				r.Put("/medications/{med_id}", dashHandler.UpdateMedication)
 				r.Delete("/medications/{med_id}", dashHandler.DeleteMedication)
+
+				r.Route("/care", func(r chi.Router) {
+					r.Get("/timeline", careHandler.Timeline)
+					r.Get("/daily-brief", careHandler.DailyBrief)
+					r.Get("/weekly-report", careHandler.WeeklyReport)
+					r.Get("/incident-report", careHandler.IncidentReport)
+					r.Post("/export/pdf", careHandler.ExportPDF)
+				})
 			})
 
 			// Volunteers
@@ -288,9 +308,34 @@ func main() {
 		r.Post("/usage/session/start", billingHandler.StartUsageSession)
 		r.Post("/usage/session/commit", billingHandler.CommitUsageSession)
 		r.Post("/usage/grant", billingHandler.GrantUsageQuota)
+		r.Post("/ai-cost/record", billingHandler.RecordAICostEvent)
+		r.Post("/tracking/events", trackingHandler.RecordEvent)
 	})
 
 	r.Post("/api/webhooks/revenuecat", billingHandler.RevenueCatWebhook)
+
+	r.Route("/api/admin", func(r chi.Router) {
+		r.Use(middleware.Auth(jwtSecret, rdb))
+		r.Use(admin.RequireAdmin)
+
+		r.Get("/users", adminHandler.SearchUsers)
+		r.Get("/users/{user_id}", adminHandler.GetUserProfile)
+		r.Get("/users/{user_id}/family-links", adminHandler.GetUserFamilyLinks)
+		r.Get("/users/{user_id}/subscription", adminHandler.GetUserSubscription)
+		r.Get("/users/{user_id}/usage", adminHandler.GetUserUsage)
+		r.Get("/users/{user_id}/ai-cost", adminHandler.GetUserAICostEvents)
+		r.Get("/users/{user_id}/timeline", adminHandler.GetUserTimeline)
+		r.Get("/users/{user_id}/billing-transactions", adminHandler.ListUserBillingTransactions)
+		r.Get("/users/{user_id}/entitlements", adminHandler.GetUserEntitlements)
+		r.Post("/users/{user_id}/manual-grant", adminHandler.ManualGrant)
+		r.Get("/billing-transactions", adminHandler.ListBillingTransactions)
+		r.Get("/subscription-events", adminHandler.ListSubscriptionEvents)
+		r.Get("/audit-logs", adminHandler.GetAuditLogs)
+		r.Get("/analytics", adminHandler.GetAnalytics)
+		r.Get("/ai-cost", adminHandler.GetAICostSummary)
+		r.Get("/tracking", adminHandler.GetTrackingSummary)
+		r.Post("/tracking/events", adminHandler.RecordTrackingEvent)
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {

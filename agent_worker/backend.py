@@ -176,5 +176,60 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def record_ai_cost(
+        self,
+        user_id: str,
+        provider: str,
+        model: str,
+        modality: str,
+        source: str,
+        source_id: str,
+        cost_usd: float,
+        cost_vnd: float,
+        estimated: bool,
+        pricing_version: str,
+        occurred_at: str,
+        metadata: dict | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        audio_input_seconds: float = 0,
+        audio_output_seconds: float = 0,
+        image_count: int = 0,
+        video_seconds: float = 0,
+    ) -> dict:
+        """Record internal AI cost telemetry for admin analytics."""
+        resp = await self.client.post(
+            "/ai-cost/record",
+            json={
+                "user_id": user_id,
+                "provider": provider,
+                "model": model,
+                "modality": modality,
+                "source": source,
+                "source_id": source_id,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "audio_input_seconds": audio_input_seconds,
+                "audio_output_seconds": audio_output_seconds,
+                "image_count": image_count,
+                "video_seconds": video_seconds,
+                "cost_usd": cost_usd,
+                "cost_vnd": cost_vnd,
+                "currency": "USD",
+                "estimated": estimated,
+                "pricing_version": pricing_version,
+                "occurred_at": occurred_at,
+                "metadata": metadata or {},
+            },
+            headers={"X-Internal-Key": self.api_key},
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                "record_ai_cost %s failed: %d %s",
+                model, resp.status_code, resp.text,
+            )
+        resp.raise_for_status()
+        return resp.json()
+
     async def close(self):
         await self.client.aclose()

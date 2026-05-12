@@ -64,10 +64,25 @@ func (s *Service) AuthenticateGoogle(ctx context.Context, idToken, role string) 
 		user.Role = role
 	}
 
-	// Cache user status for middleware fast-path
-	s.cacheUserStatus(ctx, user.ID.String(), user.Role)
+	effectiveRole := s.resolveEffectiveRole(ctx, user.ID.String(), user.Role)
 
-	return s.generateTokenPair(user.ID.String(), user.Role)
+	s.cacheUserStatus(ctx, user.ID.String(), effectiveRole)
+
+	return s.generateTokenPair(user.ID.String(), effectiveRole)
+}
+
+func (s *Service) resolveEffectiveRole(ctx context.Context, userID, baseRole string) string {
+	if s.db == nil {
+		return baseRole
+	}
+	var isAdmin bool
+	if err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM admin_users WHERE user_id = $1)`,
+		userID,
+	).Scan(&isAdmin); err != nil || !isAdmin {
+		return baseRole
+	}
+	return "admin"
 }
 
 func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error) {
@@ -96,6 +111,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 
 	sub, _ := claims["sub"].(string)
 	role, _ := claims["role"].(string)
+	effectiveRole := s.resolveEffectiveRole(ctx, sub, role)
 
 	// Invalidate the old refresh token (rotation)
 	if exp, ok := claims["exp"].(float64); ok {
@@ -105,7 +121,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 		}
 	}
 
-	return s.generateTokenPair(sub, role)
+	return s.generateTokenPair(sub, effectiveRole)
 }
 
 func (s *Service) cacheUserStatus(ctx context.Context, userID, role string) {

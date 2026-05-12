@@ -16,6 +16,7 @@ GEMINI_VIDEO_ENABLED = os.environ.get("GEMINI_VIDEO_ENABLED", "true").lower() ==
 GEMINI_VIDEO_FPS_SPEAKING = float(os.environ.get("GEMINI_VIDEO_FPS_SPEAKING", "1"))
 GEMINI_VIDEO_FPS_IDLE = float(os.environ.get("GEMINI_VIDEO_FPS_IDLE", "0.33"))
 GEMINI_GOOGLE_SEARCH_ENABLED = os.environ.get("GEMINI_GOOGLE_SEARCH_ENABLED", "false").lower() == "true"
+AI_COST_PRICING_VERSION = os.environ.get("AI_COST_PRICING_VERSION", "")
 EXA_API_KEY = os.environ.get("EXA_API_KEY", "")
 EXA_SEARCH_URL = os.environ.get("EXA_SEARCH_URL", "https://api.exa.ai/search")
 EXA_SEARCH_MAX_RESULTS = int(os.environ.get("EXA_SEARCH_MAX_RESULTS", "3"))

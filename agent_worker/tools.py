@@ -288,17 +288,17 @@ class AiSeeAgent(Agent):
     @function_tool()
     async def play_music(self, query: str) -> dict:
         """Tim va phat nhac theo yeu cau."""
-        return {
-            "status": "disabled",
-            "message": "music playback is temporarily disabled",
-        }
+        return await self._backend.tool_call(
+            "play_music", self._uid(),
+            {"query": query},
+        )
 
     @function_tool()
     async def control_music(self, action: str) -> dict:
         """Dieu khien nhac dang phat: pause, resume, stop, next, previous, volume_up, volume_down."""
         return {
             "status": "disabled",
-            "message": "music playback is temporarily disabled",
+            "message": "music playback control is temporarily disabled",
         }
 
     # --- Phase 2d: Navigation ---

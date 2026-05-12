@@ -173,7 +173,7 @@ async def test_router_dispatches_device_tool_over_transport_channel():
     event, timeout = transport.tool_requests[0]
     assert event.type == "tool_request"
     assert event.payload == {"name": "disable_camera", "params": {}}
-    assert timeout == 10.0
+    assert timeout == 5.0
     assert backend.calls == []
 
 
@@ -194,13 +194,8 @@ async def test_router_returns_error_when_device_tool_times_out():
 
 
 @pytest.mark.anyio
-async def test_router_play_music_is_temporarily_disabled_without_device_request():
+async def test_router_play_music_routes_to_backend():
     backend = FakeBackend()
-
-    async def tool_call_with_timeout(tool, user_id, params, timeout):
-        raise AssertionError("play_music should not call backend while disabled")
-
-    backend.tool_call_with_timeout = tool_call_with_timeout
     transport = FakeTransport(result={"status": "ok"})
     router = ToolRouter(
         backend=backend,
@@ -210,10 +205,14 @@ async def test_router_play_music_is_temporarily_disabled_without_device_request(
 
     result = await router.call("play_music", {"query": "song"})
 
-    assert result["status"] == "disabled"
-    assert "temporarily disabled" in result["message"]
-    assert transport.tool_requests == []
-    assert backend.calls == []
+    assert result["status"] == "ok"
+    assert len(backend.calls) == 1
+    assert backend.calls[0] == (
+        "tool_call",
+        "play_music",
+        "u1",
+        {"query": "song"},
+    )
 
 
 @pytest.mark.anyio

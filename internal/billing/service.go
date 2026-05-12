@@ -28,7 +28,11 @@ type Store interface {
 	InsertSubscriptionEvent(
 		context.Context, SubscriptionEventInput,
 	) (SubscriptionEvent, error)
+	InsertBillingTransaction(
+		context.Context, BillingTransactionInput,
+	) (BillingTransaction, error)
 	RecordUsage(context.Context, UsageRecordInput) (UsageRecord, error)
+	RecordAICostEvent(context.Context, AICostEventInput) (AICostEvent, error)
 	StartUsageSession(context.Context, UsageSessionInput) (UsageSession, error)
 	CommitUsageSession(context.Context, CommitUsageSessionInput) (UsageRecord, error)
 	GrantUsageQuota(context.Context, UsageGrantInput) (UsageGrant, error)
@@ -180,6 +184,29 @@ func (s *Service) RecordBillableUsage(
 	return s.store.RecordUsage(ctx, input)
 }
 
+func (s *Service) RecordAICostEvent(
+	ctx context.Context,
+	input AICostEventInput,
+) (AICostEvent, error) {
+	if err := validateAICostEvent(input); err != nil {
+		return AICostEvent{}, err
+	}
+	if strings.TrimSpace(input.Modality) == "" {
+		input.Modality = "live_audio"
+	}
+	if strings.TrimSpace(input.Currency) == "" {
+		input.Currency = "USD"
+	}
+	if input.OccurredAt.IsZero() {
+		input.OccurredAt = time.Now().UTC()
+	}
+	input.AudioInputSeconds = roundQuantity(input.AudioInputSeconds)
+	input.AudioOutputSeconds = roundQuantity(input.AudioOutputSeconds)
+	input.VideoSeconds = roundQuantity(input.VideoSeconds)
+	input = priceAICostEvent(input)
+	return s.store.RecordAICostEvent(ctx, input)
+}
+
 func (s *Service) RequireQuota(
 	ctx context.Context,
 	input QuotaCheckInput,
@@ -262,6 +289,15 @@ func (s *Service) StartUsageSession(
 		return UsageSession{}, fmt.Errorf("reserved_quantity must be >= 0")
 	}
 	input.ReservedQuantity = roundQuantity(input.ReservedQuantity)
+	if input.ReservedQuantity > 0 {
+		if err := s.RequireQuota(ctx, QuotaCheckInput{
+			UserID:    input.UserID,
+			UsageType: input.UsageType,
+			Quantity:  input.ReservedQuantity,
+		}); err != nil {
+			return UsageSession{}, err
+		}
+	}
 	return s.store.StartUsageSession(ctx, input)
 }
 
@@ -290,7 +326,58 @@ func (s *Service) CommitUsageSession(
 		return UsageRecord{}, fmt.Errorf("quantity must be > 0")
 	}
 	input.Quantity = roundQuantity(input.Quantity)
+	input, err := s.enforceUsageSessionCommitQuota(ctx, input)
+	if err != nil {
+		return UsageRecord{}, err
+	}
 	return s.store.CommitUsageSession(ctx, input)
+}
+
+func (s *Service) enforceUsageSessionCommitQuota(
+	ctx context.Context,
+	input CommitUsageSessionInput,
+) (CommitUsageSessionInput, error) {
+	decision, err := s.CheckQuota(ctx, QuotaCheckInput{
+		UserID:    input.UserID,
+		UsageType: input.UsageType,
+		Quantity:  input.Quantity,
+	})
+	if err != nil {
+		return CommitUsageSessionInput{}, err
+	}
+	if decision.Allowed {
+		return input, nil
+	}
+	if decision.Remaining <= 0 {
+		return CommitUsageSessionInput{}, &QuotaExceededError{
+			Code:        "quota_exceeded",
+			UsageType:   decision.UsageType,
+			Required:    input.Quantity,
+			Remaining:   decision.Remaining,
+			PlanCode:    decision.PlanCode,
+			ResetPeriod: decision.ResetPeriod,
+		}
+	}
+
+	requestedQuantity := input.Quantity
+	input.Quantity = roundQuantity(decision.Remaining)
+	if input.Quantity <= 0 {
+		return CommitUsageSessionInput{}, &QuotaExceededError{
+			Code:        "quota_exceeded",
+			UsageType:   decision.UsageType,
+			Required:    requestedQuantity,
+			Remaining:   decision.Remaining,
+			PlanCode:    decision.PlanCode,
+			ResetPeriod: decision.ResetPeriod,
+		}
+	}
+	if input.Metadata == nil {
+		input.Metadata = map[string]any{}
+	}
+	input.Metadata["quota_capped"] = true
+	input.Metadata["requested_quantity"] = requestedQuantity
+	input.Metadata["committed_quantity"] = input.Quantity
+	return input, nil
 }
 
 func (s *Service) GrantUsageQuota(
@@ -659,6 +746,36 @@ func validateUsageRecord(input UsageRecordInput) error {
 	return nil
 }
 
+func validateAICostEvent(input AICostEventInput) error {
+	if strings.TrimSpace(input.UserID) == "" {
+		return fmt.Errorf("user_id is required")
+	}
+	if strings.TrimSpace(input.Provider) == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if strings.TrimSpace(input.Model) == "" {
+		return fmt.Errorf("model is required")
+	}
+	if strings.TrimSpace(input.Source) == "" {
+		return fmt.Errorf("source is required")
+	}
+	if strings.TrimSpace(input.SourceID) == "" {
+		return fmt.Errorf("source_id is required")
+	}
+	if input.InputTokens < 0 || input.OutputTokens < 0 ||
+		input.ImageCount < 0 {
+		return fmt.Errorf("token and image counters must be >= 0")
+	}
+	if input.AudioInputSeconds < 0 || input.AudioOutputSeconds < 0 ||
+		input.VideoSeconds < 0 {
+		return fmt.Errorf("media counters must be >= 0")
+	}
+	if input.CostUSD < 0 || input.CostVND < 0 {
+		return fmt.Errorf("cost must be >= 0")
+	}
+	return nil
+}
+
 func validateUsageFields(
 	userID string,
 	usageType UsageType,
@@ -699,6 +816,10 @@ func durationQuantity(start, end time.Time, unit string) float64 {
 
 func roundQuantity(value float64) float64 {
 	return math.Round(value*100) / 100
+}
+
+func roundCost(value float64) float64 {
+	return math.Round(value*1000000) / 1000000
 }
 
 func ceilQuantity(value float64) float64 {

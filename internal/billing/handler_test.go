@@ -26,6 +26,7 @@ type fakeReadService struct {
 	quotaInput         QuotaCheckInput
 	quotaDecision      QuotaDecision
 	recordInput        UsageRecordInput
+	aiCostInput        AICostEventInput
 	sessionInput       UsageSessionInput
 	commitInput        CommitUsageSessionInput
 	grantInput         UsageGrantInput
@@ -108,6 +109,27 @@ func (f *fakeReadService) RecordBillableUsage(
 	input UsageRecordInput,
 ) (UsageRecord, error) {
 	return f.RecordUsage(ctx, input)
+}
+
+func (f *fakeReadService) RecordAICostEvent(
+	_ context.Context,
+	input AICostEventInput,
+) (AICostEvent, error) {
+	f.aiCostInput = input
+	return AICostEvent{
+		ID:         "ai-cost-1",
+		UserID:     input.UserID,
+		Provider:   input.Provider,
+		Model:      input.Model,
+		Modality:   input.Modality,
+		Source:     input.Source,
+		SourceID:   input.SourceID,
+		CostUSD:    input.CostUSD,
+		CostVND:    input.CostVND,
+		Currency:   input.Currency,
+		Estimated:  input.Estimated,
+		OccurredAt: input.OccurredAt,
+	}, nil
 }
 
 func (f *fakeReadService) StartUsageSession(

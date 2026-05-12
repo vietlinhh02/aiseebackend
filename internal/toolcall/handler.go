@@ -611,6 +611,20 @@ func (h *Handler) handlePlayMusic(
 		return nil, err
 	}
 
+	if err := h.recordUsage(ctx, billing.UsageRecordInput{
+		UserID:    req.UserID,
+		UsageType: billing.UsageMusicSessions,
+		Quantity:  1,
+		Unit:      "sessions",
+		Source:    "agent",
+		SourceID:  query,
+		Metadata: map[string]any{
+			"title": result.Title,
+		},
+	}); err != nil {
+		return nil, err
+	}
+
 	return map[string]any{
 		"status": "found",
 		"title":  result.Title,

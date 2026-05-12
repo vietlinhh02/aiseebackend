@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -21,6 +22,7 @@ type ReadService interface {
 	CheckQuota(context.Context, QuotaCheckInput) (QuotaDecision, error)
 	RecordUsage(context.Context, UsageRecordInput) (UsageRecord, error)
 	RecordBillableUsage(context.Context, UsageRecordInput) (UsageRecord, error)
+	RecordAICostEvent(context.Context, AICostEventInput) (AICostEvent, error)
 	StartUsageSession(context.Context, UsageSessionInput) (UsageSession, error)
 	CommitUsageSession(context.Context, CommitUsageSessionInput) (UsageRecord, error)
 	GrantUsageQuota(context.Context, UsageGrantInput) (UsageGrant, error)
@@ -33,10 +35,18 @@ type Handler struct {
 	service             ReadService
 	revenueCatAuthToken string
 	revenueCatConfig    RevenueCatConfig
+	tracking            *tracking.Service
 }
 
 func NewHandler(service ReadService) *Handler {
 	return &Handler{service: service}
+}
+
+func NewHandlerWithTracking(
+	service ReadService,
+	trackingService *tracking.Service,
+) *Handler {
+	return &Handler{service: service, tracking: trackingService}
 }
 
 func NewHandlerWithConfig(
@@ -48,6 +58,20 @@ func NewHandlerWithConfig(
 		service:             service,
 		revenueCatAuthToken: revenueCatAuthToken,
 		revenueCatConfig:    revenueCatConfig,
+	}
+}
+
+func NewHandlerWithConfigAndTracking(
+	service ReadService,
+	revenueCatAuthToken string,
+	revenueCatConfig RevenueCatConfig,
+	trackingService *tracking.Service,
+) *Handler {
+	return &Handler{
+		service:             service,
+		revenueCatAuthToken: revenueCatAuthToken,
+		revenueCatConfig:    revenueCatConfig,
+		tracking:            trackingService,
 	}
 }
 
@@ -138,12 +162,41 @@ func (h *Handler) RecordUsage(w http.ResponseWriter, r *http.Request) {
 	record, err := h.service.RecordBillableUsage(r.Context(), input)
 	if err != nil {
 		if writeQuotaError(w, err) {
+			h.trackBilling(r.Context(), input.UserID, "quota_check_denied", input.Source, input.SourceID, map[string]any{
+				"usage_type": input.UsageType,
+				"quantity":   input.Quantity,
+				"unit":       input.Unit,
+			})
 			return
 		}
 		response.Err(w, http.StatusBadRequest, "usage_invalid", err.Error())
 		return
 	}
+	h.trackBilling(r.Context(), record.UserID, "usage_recorded", record.Source, record.SourceID, map[string]any{
+		"usage_type": record.UsageType,
+		"quantity":   record.Quantity,
+		"unit":       record.Unit,
+	})
 	response.JSON(w, http.StatusCreated, record)
+}
+
+func (h *Handler) RecordAICostEvent(w http.ResponseWriter, r *http.Request) {
+	var input AICostEventInput
+	if !decodeBillingJSON(w, r, &input) {
+		return
+	}
+	event, err := h.service.RecordAICostEvent(r.Context(), input)
+	if err != nil {
+		response.Err(w, http.StatusBadRequest, "ai_cost_invalid", err.Error())
+		return
+	}
+	h.trackBilling(r.Context(), event.UserID, "ai_cost_recorded", event.Source, event.SourceID, map[string]any{
+		"provider":  event.Provider,
+		"model":     event.Model,
+		"cost_usd":  event.CostUSD,
+		"estimated": event.Estimated,
+	})
+	response.JSON(w, http.StatusCreated, event)
 }
 
 func (h *Handler) CheckQuota(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +210,13 @@ func (h *Handler) CheckQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !decision.Allowed {
+		h.trackBilling(r.Context(), input.UserID, "quota_check_denied", "quota", string(input.UsageType), map[string]any{
+			"usage_type":   decision.UsageType,
+			"required":     decision.Required,
+			"remaining":    decision.Remaining,
+			"plan_code":    decision.PlanCode,
+			"reset_period": decision.ResetPeriod,
+		})
 		_ = writeQuotaError(w, &QuotaExceededError{
 			Code:        "quota_exceeded",
 			UsageType:   decision.UsageType,
@@ -180,6 +240,11 @@ func (h *Handler) StartUsageSession(w http.ResponseWriter, r *http.Request) {
 		response.Err(w, http.StatusBadRequest, "usage_session_invalid", err.Error())
 		return
 	}
+	h.trackBilling(r.Context(), session.UserID, "usage_session_started", session.Source, session.SourceID, map[string]any{
+		"usage_type":        session.UsageType,
+		"reserved_quantity": session.ReservedQuantity,
+		"unit":              session.Unit,
+	})
 	response.JSON(w, http.StatusCreated, session)
 }
 
@@ -191,11 +256,21 @@ func (h *Handler) CommitUsageSession(w http.ResponseWriter, r *http.Request) {
 	record, err := h.service.CommitUsageSession(r.Context(), input)
 	if err != nil {
 		if writeQuotaError(w, err) {
+			h.trackBilling(r.Context(), input.UserID, "quota_check_denied", input.Source, input.SourceID, map[string]any{
+				"usage_type": input.UsageType,
+				"quantity":   input.Quantity,
+				"unit":       input.Unit,
+			})
 			return
 		}
 		response.Err(w, http.StatusBadRequest, "usage_session_invalid", err.Error())
 		return
 	}
+	h.trackBilling(r.Context(), record.UserID, "usage_session_committed", record.Source, record.SourceID, map[string]any{
+		"usage_type": record.UsageType,
+		"quantity":   record.Quantity,
+		"unit":       record.Unit,
+	})
 	response.JSON(w, http.StatusOK, record)
 }
 
@@ -210,6 +285,33 @@ func (h *Handler) GrantUsageQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusCreated, grant)
+}
+
+func (h *Handler) trackBilling(
+	ctx context.Context,
+	userID string,
+	eventType string,
+	source string,
+	sourceID string,
+	metadata map[string]any,
+) {
+	if h.tracking == nil || strings.TrimSpace(userID) == "" {
+		return
+	}
+	if strings.TrimSpace(source) == "" {
+		source = "billing"
+	}
+	if strings.TrimSpace(sourceID) == "" {
+		sourceID = eventType
+	}
+	_, _ = h.tracking.RecordEvent(ctx, tracking.EventInput{
+		UserID:    userID,
+		EventType: eventType,
+		Category:  "system",
+		Source:    source,
+		SourceID:  sourceID,
+		Metadata:  metadata,
+	})
 }
 
 func (h *Handler) RevenueCatWebhook(w http.ResponseWriter, r *http.Request) {

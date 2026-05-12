@@ -7,12 +7,15 @@ import json
 import logging
 from dataclasses import dataclass
 from logging import Logger
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from livekit import rtc
 
 from .audio import pcm_to_audio_frame
 from .video import video_frame_to_jpeg_blob
+
+if TYPE_CHECKING:
+    from .nsfw_filter import NsfwFilter
 
 logger = logging.getLogger("aisee-agent")
 
@@ -122,7 +125,14 @@ async def forward_audio_track(track, gemini_session, settings, logger: Logger) -
         await stream.aclose()
 
 
-async def forward_video_track(track, gemini_session, fps: float, logger: Logger) -> None:
+async def forward_video_track(
+    track,
+    gemini_session,
+    fps: float,
+    logger: Logger,
+    *,
+    nsfw_filter: NsfwFilter | None = None,
+) -> None:
     if fps <= 0:
         return
     stream = rtc.VideoStream(track)
@@ -135,6 +145,9 @@ async def forward_video_track(track, gemini_session, fps: float, logger: Logger)
                 continue
             last_sent = now
             blob = video_frame_to_jpeg_blob(event.frame)
+            if nsfw_filter is not None and blob.data and not nsfw_filter.is_safe(blob.data):
+                logger.warning("nsfw frame blocked at agent layer (livekit)")
+                continue
             await gemini_session.send_realtime_input(video=blob)
     except asyncio.CancelledError:
         raise

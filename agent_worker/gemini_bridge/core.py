@@ -11,6 +11,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
+from .nsfw_filter import NsfwFilter, logger as nsfw_logger
 from .schemas import build_gemini_tools
 from .state import AgentState
 from .tool_router import ToolRouter
@@ -240,6 +241,7 @@ class GeminiTransportSession:
     settings: GeminiLiveSettings
     transport: GeminiTransport
     tool_router: ToolRouter
+    nsfw_filter: NsfwFilter | None = None
 
     async def run(self, gemini_session) -> None:
         state_publisher = TransportStatePublisher(transport=self.transport)
@@ -290,6 +292,9 @@ class GeminiTransportSession:
         if isinstance(event, InboundVideoEvent):
             await state_publisher.publish(AgentState.LISTENING)
             if event.jpeg:
+                if self.nsfw_filter is not None and not self.nsfw_filter.is_safe(event.jpeg):
+                    nsfw_logger.warning("nsfw frame blocked at agent layer")
+                    return
                 await gemini_session.send_realtime_input(video=self.settings.video_blob(event.jpeg))
             return
         if isinstance(event, InboundTextEvent):

@@ -17,6 +17,7 @@ from logging import Logger
 
 from backend import BackendClient
 from config import (
+    AI_COST_PRICING_VERSION,
     GEMINI_RESPONSE_AUDIO_SAMPLE_RATE,
     GEMINI_VIDEO_ENABLED,
     GEMINI_VIDEO_FPS_IDLE,
@@ -34,6 +35,7 @@ from .livekit_io import (
     forward_audio_track,
     forward_video_track,
 )
+from .nsfw_filter import NsfwFilter
 from .state import AgentState, publish_agent_state
 from .tool_router import ToolRouter
 
@@ -80,13 +82,17 @@ class GoogleSDKBridge:
         )
         await audio_publisher.start()
 
+        nsfw_filter = _load_nsfw_filter(self.logger)
+
         disconnect_event = asyncio.Event()
         duplicate_event = asyncio.Event()
         wake_event = asyncio.Event()
         track_tasks: set[asyncio.Task] = set()
         ai_usage_started_at: str | None = None
+        ai_usage_started_time: datetime | None = None
         ai_usage_source_id = room.name
         active_gemini_session = {"session": None}
+        usage_metadata_events: list[dict] = []
 
         @local.register_rpc_method("wake_conversation_ready")
         async def _wake_conversation_ready(data) -> str:
@@ -128,7 +134,8 @@ class GoogleSDKBridge:
                 config=settings.build_live_config_with_prompt(instructions),
             ) as gemini_session:
                 active_gemini_session["session"] = gemini_session
-                ai_usage_started_at = datetime.now(timezone.utc).isoformat()
+                ai_usage_started_time = datetime.now(timezone.utc)
+                ai_usage_started_at = ai_usage_started_time.isoformat()
                 if user_context.get("user_id"):
                     try:
                         await backend.start_usage_session(
@@ -142,9 +149,14 @@ class GoogleSDKBridge:
                         )
                     except Exception as exc:
                         self.logger.warning("start ai usage session failed: %s", exc)
-                self._wire_track_subscription(room, gemini_session, settings, track_tasks)
+                self._wire_track_subscription(room, gemini_session, settings, track_tasks, nsfw_filter)
                 receive_task = asyncio.create_task(
-                    self._receive_loop(gemini_session, handler, local)
+                    self._receive_loop(
+                        gemini_session,
+                        handler,
+                        local,
+                        usage_metadata_events,
+                    )
                 )
                 wake_task = asyncio.create_task(
                     self._wake_greeting_loop(wake_event, active_gemini_session, local)
@@ -173,7 +185,8 @@ class GoogleSDKBridge:
             await publish_agent_state(local, AgentState.ERROR, self.logger)
             raise
         finally:
-            ended_at = datetime.now(timezone.utc).isoformat()
+            ended_at_time = datetime.now(timezone.utc)
+            ended_at = ended_at_time.isoformat()
             active_gemini_session["session"] = None
             await cancel_track_tasks(track_tasks)
             if user_context.get("user_id") and ai_usage_started_at:
@@ -190,6 +203,19 @@ class GoogleSDKBridge:
                     )
                 except Exception as exc:
                     self.logger.warning("commit ai usage session failed: %s", exc)
+                try:
+                    await self._record_ai_cost_event(
+                        backend=backend,
+                        user_id=user_context["user_id"],
+                        model=settings.model,
+                        source_id=ai_usage_source_id,
+                        started_at=ai_usage_started_time,
+                        ended_at=ended_at_time,
+                        occurred_at=ended_at,
+                        usage_metadata_events=usage_metadata_events,
+                    )
+                except Exception as exc:
+                    self.logger.warning("record ai cost event failed: %s", exc)
             await publish_agent_state(local, AgentState.DISCONNECTED, self.logger)
             await audio_publisher.close()
             await backend.close()
@@ -207,19 +233,80 @@ class GoogleSDKBridge:
             self.logger.info("sending wake greeting to Gemini")
             await send_wake_greeting(session)
 
-    async def _receive_loop(self, gemini_session, handler: "GeminiEventHandler", local) -> None:
+    async def _receive_loop(
+        self,
+        gemini_session,
+        handler: "GeminiEventHandler",
+        local,
+        usage_metadata_events: list[dict] | None = None,
+    ) -> None:
+        if usage_metadata_events is None:
+            usage_metadata_events = []
         while True:
             saw_message = False
             async for message in gemini_session.receive():
                 saw_message = True
                 await handler.handle(gemini_session, message)
+                metadata = _usage_metadata_from_message(message)
+                if metadata:
+                    usage_metadata_events.append(metadata)
                 server_content = getattr(message, "server_content", None)
                 if server_content and getattr(server_content, "turn_complete", False):
                     await publish_agent_state(local, AgentState.IDLE, self.logger)
             if not saw_message:
                 return
 
-    def _wire_track_subscription(self, room, gemini_session, settings, track_tasks: set[asyncio.Task]) -> None:
+    async def _record_ai_cost_event(
+        self,
+        *,
+        backend: BackendClient,
+        user_id: str,
+        model: str,
+        source_id: str,
+        started_at: datetime | None,
+        ended_at: datetime,
+        occurred_at: str,
+        usage_metadata_events: list[dict],
+    ) -> None:
+        duration_seconds = max(
+            0.0,
+            (ended_at - started_at).total_seconds() if started_at else 0.0,
+        )
+        token_totals = _sum_token_usage(usage_metadata_events)
+        audio_input_seconds = _number_from_metadata(
+            usage_metadata_events,
+            "audio_input_seconds",
+        ) or duration_seconds
+        audio_output_seconds = _number_from_metadata(
+            usage_metadata_events,
+            "audio_output_seconds",
+        )
+        metadata = {
+            "engine": "google_sdk",
+            "room_name": source_id,
+            "duration_seconds": duration_seconds,
+            "raw_usage_metadata": usage_metadata_events,
+        }
+        await backend.record_ai_cost(
+            user_id=user_id,
+            provider="google",
+            model=model,
+            modality="live_audio",
+            source="agent",
+            source_id=source_id,
+            input_tokens=token_totals["input_tokens"],
+            output_tokens=token_totals["output_tokens"],
+            audio_input_seconds=audio_input_seconds,
+            audio_output_seconds=audio_output_seconds,
+            cost_usd=0,
+            cost_vnd=0,
+            estimated=len(usage_metadata_events) == 0,
+            pricing_version=AI_COST_PRICING_VERSION,
+            occurred_at=occurred_at,
+            metadata=metadata,
+        )
+
+    def _wire_track_subscription(self, room, gemini_session, settings, track_tasks: set[asyncio.Task], nsfw_filter: NsfwFilter | None = None) -> None:
         def _start_track(track, participant):
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT:
                 return
@@ -231,7 +318,13 @@ class GoogleSDKBridge:
                 task.add_done_callback(track_tasks.discard)
             elif track.kind == rtc.TrackKind.KIND_VIDEO and GEMINI_VIDEO_ENABLED:
                 task = asyncio.create_task(
-                    forward_video_track(track, gemini_session, GEMINI_VIDEO_FPS_IDLE, self.logger)
+                    forward_video_track(
+                        track,
+                        gemini_session,
+                        GEMINI_VIDEO_FPS_IDLE,
+                        self.logger,
+                        nsfw_filter=nsfw_filter,
+                    )
                 )
                 track_tasks.add(task)
                 task.add_done_callback(track_tasks.discard)
@@ -297,3 +390,70 @@ async def cancel_track_tasks(track_tasks: set[asyncio.Task]) -> None:
     for task in tasks:
         with suppress(asyncio.CancelledError):
             await task
+
+
+def _usage_metadata_from_message(message) -> dict:
+    for attr in ("usage_metadata", "response_usage_metadata"):
+        metadata = getattr(message, attr, None)
+        if metadata:
+            return _jsonable_metadata(metadata)
+    server_content = getattr(message, "server_content", None)
+    if server_content is not None:
+        metadata = getattr(server_content, "usage_metadata", None)
+        if metadata:
+            return _jsonable_metadata(metadata)
+    return {}
+
+
+def _jsonable_metadata(value) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    for method in ("to_json_dict", "model_dump"):
+        fn = getattr(value, method, None)
+        if callable(fn):
+            try:
+                result = fn()
+                return result if isinstance(result, dict) else {}
+            except Exception:
+                return {}
+    try:
+        encoded = json.loads(json.dumps(value, default=lambda obj: getattr(obj, "__dict__", str(obj))))
+        return encoded if isinstance(encoded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sum_token_usage(events: list[dict]) -> dict[str, int]:
+    input_tokens = 0
+    output_tokens = 0
+    for event in events:
+        input_tokens += int(
+            event.get("prompt_token_count")
+            or event.get("input_token_count")
+            or event.get("input_tokens")
+            or 0
+        )
+        output_tokens += int(
+            event.get("candidates_token_count")
+            or event.get("output_token_count")
+            or event.get("output_tokens")
+            or 0
+        )
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _load_nsfw_filter(log: Logger) -> NsfwFilter | None:
+    try:
+        return NsfwFilter()
+    except Exception as exc:
+        log.warning("nsfw filter unavailable, skipping server-side guard: %s", exc)
+        return None
+
+
+def _number_from_metadata(events: list[dict], key: str) -> float:
+    total = 0.0
+    for event in events:
+        value = event.get(key)
+        if isinstance(value, (int, float)):
+            total += float(value)
+    return total

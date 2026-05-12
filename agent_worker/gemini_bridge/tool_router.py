@@ -87,7 +87,6 @@ class ToolRouter:
                     "set_appointment_reminder"
                 ),
                 "emergency_alert": self._emergency_alert,
-                "play_music": self._music_disabled,
                 "control_music": self._music_disabled,
                 "navigate_to": self._navigate_to,
                 "web_search": self._web_search,
@@ -250,6 +249,7 @@ BACKEND_TOOLS = {
     "mark_medication_skipped",
     "log_health_symptom",
     "log_health_metric",
+    "play_music",
     "escalate_to_volunteer",
     "rate_volunteer",
 }

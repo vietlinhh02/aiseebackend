@@ -1,11 +1,13 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -24,8 +26,9 @@ type wsDialFunc func(context.Context, string, *websocket.DialOptions) (*websocke
 type NoopBridge struct{}
 
 type WebSocketBridge struct {
-	upstreamURL string
-	dial        wsDialFunc
+	upstreamURL   string
+	dial          wsDialFunc
+	cameraBlocked atomic.Bool
 }
 
 type proxyResult struct {
@@ -78,12 +81,14 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 		return fmt.Errorf("send assistant init frame: %w", err)
 	}
 
+	b.cameraBlocked.Store(false)
+
 	proxyCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	results := make(chan proxyResult, 2)
-	go proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
-	go proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
+	go b.proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
+	go b.proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
 
 	result := <-results
 	cancel()
@@ -109,12 +114,31 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 	}
 }
 
-func proxyFrames(ctx context.Context, source string, src, dst *websocket.Conn, results chan<- proxyResult) {
+func (b *WebSocketBridge) proxyFrames(ctx context.Context, source string, src, dst *websocket.Conn, results chan<- proxyResult) {
 	for {
 		msgType, payload, err := src.Read(ctx)
 		if err != nil {
 			results <- proxyResult{source: source, err: err}
 			return
+		}
+
+		// L2: Camera block latch — drop JPEG binary frames when blocked,
+		// detect nsfw_detected / camera re-enable from text frames.
+		if source == "client" {
+			if msgType == websocket.MessageBinary {
+				if b.cameraBlocked.Load() && len(payload) >= 2 &&
+					payload[0] == 0xFF && payload[1] == 0xD8 {
+					continue // drop JPEG frame
+				}
+			} else if msgType == websocket.MessageText {
+				if bytes.Contains(payload, []byte(`"nsfw_detected"`)) {
+					b.cameraBlocked.Store(true)
+				}
+				if bytes.Contains(payload, []byte(`"media_mode"`)) &&
+					bytes.Contains(payload, []byte(`"camera_jpeg"`)) {
+					b.cameraBlocked.Store(false)
+				}
+			}
 		}
 
 		if err := dst.Write(ctx, msgType, payload); err != nil {

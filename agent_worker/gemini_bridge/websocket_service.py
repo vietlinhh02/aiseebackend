@@ -7,6 +7,7 @@ import json
 import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, AsyncContextManager, AsyncIterator, Callable, Protocol
 
 from google.genai import errors as genai_errors
@@ -14,6 +15,7 @@ from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
 from .core import GeminiLiveSettings, GeminiTransportSession
+from .nsfw_filter import NsfwFilter
 from .state import AgentState
 from .tool_router import ToolRouter
 from .transport import (
@@ -50,6 +52,8 @@ class GeminiBridgeWebSocketTransport:
     websocket: WebSocketConnection
     log: logging.Logger = field(default_factory=lambda: logger)
     media_mode: str = "audio"
+    on_audio_start: Callable[[], Any] | None = None
+    on_audio_stop: Callable[[], Any] | None = None
     session_context: dict[str, Any] = field(default_factory=dict, init=False)
     _prefetched: asyncio.Queue[str | bytes] = field(default_factory=asyncio.Queue, init=False)
     _pending_tool_results: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -180,7 +184,12 @@ class GeminiBridgeWebSocketTransport:
                 return None
             return InboundControlEvent(action=action, payload=payload_map)
 
-        if message_type in {"audio_start", "audio_stop"}:
+        if message_type == "audio_start":
+            await self._call_audio_hook(self.on_audio_start)
+            return None
+
+        if message_type == "audio_stop":
+            await self._call_audio_hook(self.on_audio_stop)
             return None
 
         if message_type == "interrupt":
@@ -299,6 +308,93 @@ class GeminiBridgeWebSocketTransport:
     def _string_value(value: object) -> str:
         return value.strip() if isinstance(value, str) else ""
 
+    async def _call_audio_hook(self, callback: Callable[[], Any] | None) -> None:
+        if callback is None:
+            return
+        result = callback()
+        if asyncio.iscoroutine(result):
+            await result
+
+
+@dataclass(slots=True)
+class AIUsageSessionTracker:
+    backend: Any
+    session_context: dict[str, Any]
+    log: logging.Logger
+    started_at: str | None = None
+    active_source_id: str = ""
+    sequence: int = 0
+
+    async def start(self) -> None:
+        if self.started_at is not None:
+            return
+        user_id = self._user_id()
+        if not user_id:
+            return
+        started_at = datetime.now(timezone.utc).isoformat()
+        self.sequence += 1
+        source_id = self._source_id()
+        try:
+            await self.backend.start_usage_session(
+                user_id,
+                "ai_minutes",
+                "minutes",
+                "assistant_ws",
+                source_id,
+                started_at,
+                self._metadata(),
+            )
+        except Exception as exc:
+            self.log.warning("start websocket ai usage session failed: %s", exc)
+            return
+        self.started_at = started_at
+        self.active_source_id = source_id
+
+    async def commit(self) -> None:
+        if self.started_at is None:
+            return
+        user_id = self._user_id()
+        started_at = self.started_at
+        source_id = self.active_source_id or self._source_id()
+        self.started_at = None
+        self.active_source_id = ""
+        if not user_id:
+            return
+        ended_at = datetime.now(timezone.utc).isoformat()
+        try:
+            await self.backend.commit_usage_session(
+                user_id,
+                "ai_minutes",
+                "minutes",
+                "assistant_ws",
+                source_id,
+                started_at,
+                ended_at,
+                self._metadata(),
+            )
+        except Exception as exc:
+            self.log.warning("commit websocket ai usage session failed: %s", exc)
+
+    def _user_id(self) -> str:
+        value = self.session_context.get("user_id")
+        return value.strip() if isinstance(value, str) else ""
+
+    def _source_id(self) -> str:
+        value = self.session_context.get("session_id")
+        if isinstance(value, str) and value.strip():
+            base = value.strip()
+        else:
+            base = f"assistant-ws-{id(self)}"
+        return f"{base}:audio:{self.sequence}"
+
+    def _metadata(self) -> dict[str, Any]:
+        return {
+            "engine": "websocket",
+            "websocket_session_id": self.session_context.get("session_id", ""),
+            "audio_session_index": self.sequence,
+            "media_mode": self.session_context.get("media_mode", ""),
+        }
+
 
 @dataclass(slots=True)
 class GeminiBridgeWebSocketService:
@@ -313,10 +409,18 @@ class GeminiBridgeWebSocketService:
         transport = GeminiBridgeWebSocketTransport(websocket=websocket, log=self.log)
         session_context = await transport.read_session_init()
         tool_router = self._build_tool_router(transport, session_context)
+        usage_tracker = AIUsageSessionTracker(
+            backend=tool_router.backend,
+            session_context=session_context,
+            log=self.log,
+        )
+        transport.on_audio_start = usage_tracker.start
+        transport.on_audio_stop = usage_tracker.commit
         live_session = GeminiTransportSession(
             settings=self.settings,
             transport=transport,
             tool_router=tool_router,
+            nsfw_filter=_load_nsfw_filter_for_service(self.log),
         )
         try:
             try:
@@ -355,6 +459,7 @@ class GeminiBridgeWebSocketService:
         finally:
             with suppress(Exception):
                 await transport.emit_state(AgentState.DISCONNECTED)
+            await usage_tracker.commit()
             await self._close_tool_router_backend(tool_router)
             await transport.close()
 
@@ -448,6 +553,14 @@ def _session_error_text(exc: Exception) -> str:
         if value:
             parts.append(str(value))
     return " ".join(parts)
+
+
+def _load_nsfw_filter_for_service(log: logging.Logger) -> NsfwFilter | None:
+    try:
+        return NsfwFilter()
+    except Exception as exc:
+        log.warning("nsfw filter unavailable, skipping server-side guard: %s", exc)
+        return None
 
 
 def _is_quota_error(exc: Exception) -> bool:

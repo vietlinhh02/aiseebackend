@@ -487,6 +487,85 @@ func (s *PgxStore) InsertSubscriptionEvent(
 	return event, nil
 }
 
+func (s *PgxStore) InsertBillingTransaction(
+	ctx context.Context,
+	input BillingTransactionInput,
+) (BillingTransaction, error) {
+	payload, err := marshalMetadata(input.Payload)
+	if err != nil {
+		return BillingTransaction{}, fmt.Errorf("marshal billing transaction payload: %w", err)
+	}
+	var subscriptionID, careGroupID, userID, planID any
+	if input.SubscriptionID != "" {
+		subscriptionID = input.SubscriptionID
+	}
+	if input.CareGroupID != "" {
+		careGroupID = input.CareGroupID
+	}
+	if input.UserID != "" {
+		userID = input.UserID
+	}
+	if input.PlanID != "" {
+		planID = input.PlanID
+	}
+
+	row := s.db.QueryRow(ctx, `
+		INSERT INTO billing_transactions (
+			subscription_id, care_group_id, user_id, plan_id,
+			provider, provider_event_id, status, amount,
+			currency, occurred_at, payload
+		)
+		VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4::uuid,
+			$5, $6, $7, $8, $9, $10, $11::jsonb
+		)
+		ON CONFLICT DO NOTHING
+		RETURNING
+			id::text,
+			COALESCE(subscription_id::text, ''),
+			COALESCE(care_group_id::text, ''),
+			COALESCE(user_id::text, ''),
+			COALESCE(plan_id::text, ''),
+			provider,
+			provider_event_id,
+			status,
+			amount::float8,
+			currency,
+			payload,
+			occurred_at,
+			created_at
+	`, subscriptionID, careGroupID, userID, planID,
+		input.Provider, input.ProviderEventID, input.Status, input.Amount,
+		input.Currency, input.OccurredAt, payload)
+
+	var tx BillingTransaction
+	var payloadJSON []byte
+	if err := row.Scan(
+		&tx.ID,
+		&tx.SubscriptionID,
+		&tx.CareGroupID,
+		&tx.UserID,
+		&tx.PlanID,
+		&tx.Provider,
+		&tx.ProviderEventID,
+		&tx.Status,
+		&tx.Amount,
+		&tx.Currency,
+		&payloadJSON,
+		&tx.OccurredAt,
+		&tx.CreatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return s.billingTransactionByProviderEventID(
+				ctx, input.Provider, input.ProviderEventID,
+			)
+		}
+		return BillingTransaction{}, fmt.Errorf("insert billing transaction: %w", err)
+	}
+	tx.Payload = decodeJSONMap(payloadJSON)
+	return tx, nil
+}
+
 func (s *PgxStore) subscriptionEventByProviderEventID(
 	ctx context.Context,
 	provider string,
@@ -527,6 +606,54 @@ func (s *PgxStore) subscriptionEventByProviderEventID(
 	}
 	event.Payload = decodeJSONMap(payloadJSON)
 	return event, nil
+}
+
+func (s *PgxStore) billingTransactionByProviderEventID(
+	ctx context.Context,
+	provider string,
+	providerEventID string,
+) (BillingTransaction, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT
+			id::text,
+			COALESCE(subscription_id::text, ''),
+			COALESCE(care_group_id::text, ''),
+			COALESCE(user_id::text, ''),
+			COALESCE(plan_id::text, ''),
+			provider,
+			provider_event_id,
+			status,
+			amount::float8,
+			currency,
+			payload,
+			occurred_at,
+			created_at
+		FROM billing_transactions
+		WHERE provider = $1 AND provider_event_id = $2
+		LIMIT 1
+	`, provider, providerEventID)
+
+	var tx BillingTransaction
+	var payloadJSON []byte
+	if err := row.Scan(
+		&tx.ID,
+		&tx.SubscriptionID,
+		&tx.CareGroupID,
+		&tx.UserID,
+		&tx.PlanID,
+		&tx.Provider,
+		&tx.ProviderEventID,
+		&tx.Status,
+		&tx.Amount,
+		&tx.Currency,
+		&payloadJSON,
+		&tx.OccurredAt,
+		&tx.CreatedAt,
+	); err != nil {
+		return BillingTransaction{}, fmt.Errorf("billing transaction lookup: %w", err)
+	}
+	tx.Payload = decodeJSONMap(payloadJSON)
+	return tx, nil
 }
 
 func (s *PgxStore) CaredUserIDsForCareGroup(
@@ -709,6 +836,92 @@ func (s *PgxStore) RecordUsage(
 	}
 	record.Metadata = decodeJSONMap(metadataJSON)
 	return record, nil
+}
+
+func (s *PgxStore) RecordAICostEvent(
+	ctx context.Context,
+	input AICostEventInput,
+) (AICostEvent, error) {
+	metadata, err := marshalMetadata(input.Metadata)
+	if err != nil {
+		return AICostEvent{}, fmt.Errorf("marshal ai cost metadata: %w", err)
+	}
+
+	var event AICostEvent
+	var metadataJSON []byte
+	if err := s.db.QueryRow(ctx, `
+		INSERT INTO ai_cost_events (
+			user_id, usage_ledger_id, session_id, provider, model, modality,
+			source, source_id, input_tokens, output_tokens,
+			audio_input_seconds, audio_output_seconds, image_count,
+			video_seconds, cost_usd, cost_vnd, currency, estimated,
+			pricing_version, occurred_at, metadata
+		)
+		VALUES (
+			$1::uuid, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid,
+			$4, $5, $6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15, $16, $17, $18,
+			$19, $20, $21::jsonb
+		)
+		ON CONFLICT (user_id, source, source_id, provider, model, modality, occurred_at)
+		DO UPDATE SET
+			usage_ledger_id = EXCLUDED.usage_ledger_id,
+			session_id = EXCLUDED.session_id,
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			audio_input_seconds = EXCLUDED.audio_input_seconds,
+			audio_output_seconds = EXCLUDED.audio_output_seconds,
+			image_count = EXCLUDED.image_count,
+			video_seconds = EXCLUDED.video_seconds,
+			cost_usd = EXCLUDED.cost_usd,
+			cost_vnd = EXCLUDED.cost_vnd,
+			currency = EXCLUDED.currency,
+			estimated = EXCLUDED.estimated,
+			pricing_version = EXCLUDED.pricing_version,
+			metadata = EXCLUDED.metadata
+		RETURNING
+			id::text, user_id::text, COALESCE(usage_ledger_id::text, ''),
+			COALESCE(session_id::text, ''), provider, model, modality,
+			source, source_id, input_tokens, output_tokens,
+			audio_input_seconds::float8, audio_output_seconds::float8,
+			image_count, video_seconds::float8, cost_usd::float8,
+			cost_vnd::float8, currency, estimated, pricing_version,
+			occurred_at, metadata, created_at
+	`, input.UserID, input.UsageLedgerID, input.SessionID,
+		input.Provider, input.Model, input.Modality, input.Source,
+		input.SourceID, input.InputTokens, input.OutputTokens,
+		input.AudioInputSeconds, input.AudioOutputSeconds, input.ImageCount,
+		input.VideoSeconds, input.CostUSD, input.CostVND, input.Currency,
+		input.Estimated, input.PricingVersion, input.OccurredAt,
+		metadata).Scan(
+		&event.ID,
+		&event.UserID,
+		&event.UsageLedgerID,
+		&event.SessionID,
+		&event.Provider,
+		&event.Model,
+		&event.Modality,
+		&event.Source,
+		&event.SourceID,
+		&event.InputTokens,
+		&event.OutputTokens,
+		&event.AudioInputSeconds,
+		&event.AudioOutputSeconds,
+		&event.ImageCount,
+		&event.VideoSeconds,
+		&event.CostUSD,
+		&event.CostVND,
+		&event.Currency,
+		&event.Estimated,
+		&event.PricingVersion,
+		&event.OccurredAt,
+		&metadataJSON,
+		&event.CreatedAt,
+	); err != nil {
+		return AICostEvent{}, fmt.Errorf("record ai cost event: %w", err)
+	}
+	event.Metadata = decodeJSONMap(metadataJSON)
+	return event, nil
 }
 
 func (s *PgxStore) StartUsageSession(

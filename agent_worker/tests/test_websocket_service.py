@@ -50,6 +50,9 @@ class FakeWebSocket:
 
 
 class FakeBackend:
+    def __init__(self):
+        self.calls = []
+
     async def tool_call(self, name, user_id, args):
         raise AssertionError(f"unexpected backend tool call: {name}")
 
@@ -63,6 +66,56 @@ class FakeBackend:
         self, user_id, quota_name, amount, unit, source_type, source_id, metadata
     ):
         return None
+
+    async def start_usage_session(
+        self,
+        user_id,
+        usage_type,
+        unit,
+        source,
+        source_id,
+        started_at,
+        metadata=None,
+    ):
+        self.calls.append(
+            (
+                "start_usage_session",
+                user_id,
+                usage_type,
+                unit,
+                source,
+                source_id,
+                started_at,
+                metadata or {},
+            )
+        )
+        return {"status": "started"}
+
+    async def commit_usage_session(
+        self,
+        user_id,
+        usage_type,
+        unit,
+        source,
+        source_id,
+        started_at,
+        ended_at,
+        metadata=None,
+    ):
+        self.calls.append(
+            (
+                "commit_usage_session",
+                user_id,
+                usage_type,
+                unit,
+                source,
+                source_id,
+                started_at,
+                ended_at,
+                metadata or {},
+            )
+        )
+        return {"status": "committed"}
 
 
 class FakeGeminiSession:
@@ -94,7 +147,9 @@ def build_settings():
     )
 
 
-def build_service(session):
+def build_service(session, backend=None):
+    backend = backend or FakeBackend()
+
     @asynccontextmanager
     async def connect(_settings, _session_context):
         yield session
@@ -103,7 +158,7 @@ def build_service(session):
         settings=build_settings(),
         gemini_session_factory=connect,
         tool_router_factory=lambda transport, session_context: ToolRouter(
-            backend=FakeBackend(),
+            backend=backend,
             user_context={"user_id": session_context.get("user_id") or "user-1"},
             device_channel=TransportDeviceCommandChannel(transport),
         ),
@@ -221,6 +276,77 @@ async def test_websocket_service_control_wake_greeting_is_forwarded():
     ]
     sent_json = [json.loads(raw) for raw in websocket.sent if isinstance(raw, str)]
     assert {"type": "agent_state", "state": "thinking"} in sent_json
+
+
+@pytest.mark.anyio
+async def test_websocket_service_tracks_ai_minutes_only_while_audio_stream_active():
+    backend = FakeBackend()
+    gemini_session = FakeGeminiSession()
+    websocket = FakeWebSocket()
+    service = build_service(gemini_session, backend=backend)
+
+    task = asyncio.create_task(service.handle(websocket))
+    await websocket.push_json(
+        {
+            "type": "session_init",
+            "payload": {"session_id": "ai-usage-1", "user_id": "user-1", "media_mode": "audio_pcm"},
+        }
+    )
+    await websocket.push_json({"type": "audio_start"})
+    await websocket.push_binary(b"\x01\x02")
+    await websocket.push_json({"type": "audio_stop"})
+    await websocket.finish()
+    await task
+
+    assert [call[0] for call in backend.calls] == [
+        "start_usage_session",
+        "commit_usage_session",
+    ]
+    start = backend.calls[0]
+    commit = backend.calls[1]
+    assert start[1:6] == (
+        "user-1",
+        "ai_minutes",
+        "minutes",
+        "assistant_ws",
+        "ai-usage-1:audio:1",
+    )
+    assert start[7]["engine"] == "websocket"
+    assert start[7]["websocket_session_id"] == "ai-usage-1"
+    assert start[7]["audio_session_index"] == 1
+    assert commit[1:6] == start[1:6]
+    assert commit[6] == start[6]
+    assert commit[7] >= commit[6]
+
+
+@pytest.mark.anyio
+async def test_websocket_service_uses_distinct_usage_source_ids_for_repeated_wakes():
+    backend = FakeBackend()
+    gemini_session = FakeGeminiSession()
+    websocket = FakeWebSocket()
+    service = build_service(gemini_session, backend=backend)
+
+    task = asyncio.create_task(service.handle(websocket))
+    await websocket.push_json(
+        {
+            "type": "session_init",
+            "payload": {"session_id": "ai-repeat", "user_id": "user-1", "media_mode": "audio_pcm"},
+        }
+    )
+    await websocket.push_json({"type": "audio_start"})
+    await websocket.push_json({"type": "audio_stop"})
+    await websocket.push_json({"type": "audio_start"})
+    await websocket.push_json({"type": "audio_stop"})
+    await websocket.finish()
+    await task
+
+    source_ids = [call[5] for call in backend.calls]
+    assert source_ids == [
+        "ai-repeat:audio:1",
+        "ai-repeat:audio:1",
+        "ai-repeat:audio:2",
+        "ai-repeat:audio:2",
+    ]
 
 
 @pytest.mark.anyio

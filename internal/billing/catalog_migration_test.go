@@ -72,3 +72,46 @@ func TestCareGroupBillingMigrationBackfillsLegacyBillingRows(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingTransactionsMigrationCreatesProviderEventLedger(t *testing.T) {
+	sql, err := os.ReadFile("../../db/migrations/013_billing_transactions.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	body := string(sql)
+
+	required := []string{
+		"CREATE TABLE billing_transactions",
+		"provider_event_id TEXT NOT NULL",
+		"status TEXT NOT NULL",
+		"amount NUMERIC(12,2) NOT NULL",
+		"currency TEXT NOT NULL",
+		"payload JSONB NOT NULL DEFAULT '{}'::jsonb",
+		"CREATE UNIQUE INDEX idx_billing_transactions_provider_event",
+		"ON billing_transactions(provider, provider_event_id)",
+	}
+	for _, want := range required {
+		if !strings.Contains(body, want) {
+			t.Fatalf("billing transaction migration missing: %s", want)
+		}
+	}
+}
+
+func TestAdminDemoSeedMigrationRequiresExplicitOptIn(t *testing.T) {
+	sql, err := os.ReadFile("../../db/migrations/012_admin_demo_seed.up.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	body := string(sql)
+
+	required := []string{
+		"current_setting('app.seed_demo_data', true)",
+		"seed_guard AS (",
+		"WHERE seed_guard.enabled",
+	}
+	for _, want := range required {
+		if !strings.Contains(body, want) {
+			t.Fatalf("admin demo seed migration missing guard: %s", want)
+		}
+	}
+}

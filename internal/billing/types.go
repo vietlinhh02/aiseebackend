@@ -45,6 +45,56 @@ type UsageRecord struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+type AICostEventInput struct {
+	UserID             string         `json:"user_id"`
+	UsageLedgerID      string         `json:"usage_ledger_id,omitempty"`
+	SessionID          string         `json:"session_id,omitempty"`
+	Provider           string         `json:"provider"`
+	Model              string         `json:"model"`
+	Modality           string         `json:"modality"`
+	Source             string         `json:"source"`
+	SourceID           string         `json:"source_id"`
+	InputTokens        int64          `json:"input_tokens,omitempty"`
+	OutputTokens       int64          `json:"output_tokens,omitempty"`
+	AudioInputSeconds  float64        `json:"audio_input_seconds,omitempty"`
+	AudioOutputSeconds float64        `json:"audio_output_seconds,omitempty"`
+	ImageCount         int64          `json:"image_count,omitempty"`
+	VideoSeconds       float64        `json:"video_seconds,omitempty"`
+	CostUSD            float64        `json:"cost_usd"`
+	CostVND            float64        `json:"cost_vnd,omitempty"`
+	Currency           string         `json:"currency,omitempty"`
+	Estimated          bool           `json:"estimated"`
+	PricingVersion     string         `json:"pricing_version,omitempty"`
+	OccurredAt         time.Time      `json:"occurred_at,omitempty"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+}
+
+type AICostEvent struct {
+	ID                 string         `json:"id"`
+	UserID             string         `json:"user_id"`
+	UsageLedgerID      string         `json:"usage_ledger_id,omitempty"`
+	SessionID          string         `json:"session_id,omitempty"`
+	Provider           string         `json:"provider"`
+	Model              string         `json:"model"`
+	Modality           string         `json:"modality"`
+	Source             string         `json:"source"`
+	SourceID           string         `json:"source_id"`
+	InputTokens        int64          `json:"input_tokens,omitempty"`
+	OutputTokens       int64          `json:"output_tokens,omitempty"`
+	AudioInputSeconds  float64        `json:"audio_input_seconds,omitempty"`
+	AudioOutputSeconds float64        `json:"audio_output_seconds,omitempty"`
+	ImageCount         int64          `json:"image_count,omitempty"`
+	VideoSeconds       float64        `json:"video_seconds,omitempty"`
+	CostUSD            float64        `json:"cost_usd"`
+	CostVND            float64        `json:"cost_vnd,omitempty"`
+	Currency           string         `json:"currency,omitempty"`
+	Estimated          bool           `json:"estimated"`
+	PricingVersion     string         `json:"pricing_version,omitempty"`
+	OccurredAt         time.Time      `json:"occurred_at"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+}
+
 type QuotaCheckInput struct {
 	UserID    string    `json:"user_id"`
 	UsageType UsageType `json:"usage_type"`
@@ -274,6 +324,36 @@ type SubscriptionEventInput struct {
 	EventType       string         `json:"event_type"`
 	Provider        string         `json:"provider,omitempty"`
 	ProviderEventID string         `json:"provider_event_id,omitempty"`
+	Payload         map[string]any `json:"payload,omitempty"`
+	OccurredAt      time.Time      `json:"occurred_at"`
+}
+
+type BillingTransaction struct {
+	ID              string         `json:"id"`
+	SubscriptionID  string         `json:"subscription_id,omitempty"`
+	CareGroupID     string         `json:"care_group_id,omitempty"`
+	UserID          string         `json:"user_id,omitempty"`
+	PlanID          string         `json:"plan_id,omitempty"`
+	Provider        string         `json:"provider,omitempty"`
+	ProviderEventID string         `json:"provider_event_id,omitempty"`
+	Status          string         `json:"status"`
+	Amount          float64        `json:"amount"`
+	Currency        string         `json:"currency"`
+	Payload         map[string]any `json:"-"`
+	OccurredAt      time.Time      `json:"occurred_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
+type BillingTransactionInput struct {
+	SubscriptionID  string         `json:"subscription_id,omitempty"`
+	CareGroupID     string         `json:"care_group_id,omitempty"`
+	UserID          string         `json:"user_id,omitempty"`
+	PlanID          string         `json:"plan_id,omitempty"`
+	Provider        string         `json:"provider"`
+	ProviderEventID string         `json:"provider_event_id"`
+	Status          string         `json:"status"`
+	Amount          float64        `json:"amount"`
+	Currency        string         `json:"currency"`
 	Payload         map[string]any `json:"payload,omitempty"`
 	OccurredAt      time.Time      `json:"occurred_at"`
 }
