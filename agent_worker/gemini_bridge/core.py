@@ -112,10 +112,10 @@ class GeminiLiveSettings:
                 thinking_level=self._thinking_level(),
             ),
             realtime_input_config=types.RealtimeInputConfig(
-                activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                activity_handling=types.ActivityHandling.NO_INTERRUPTION,
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False,
-                    silence_duration_ms=400,
+                    silence_duration_ms=1000,
                 ),
             ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),
