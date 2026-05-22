@@ -27,7 +27,6 @@ from config import (
 from livekit import rtc
 from prompts import select_prompt
 
-from google.genai import types
 from .core import GeminiEventHandler, GeminiLiveSettings, send_wake_greeting
 from .exa_search import ExaSearchClient
 from .livekit_io import (
@@ -119,31 +118,6 @@ class GoogleSDKBridge:
         @room.on("disconnected")
         def _on_disconnect():
             disconnect_event.set()
-
-        user_was_speaking = False
-
-        @room.on("active_speakers_changed")
-        def _on_active_speakers_changed(speakers):
-            nonlocal user_was_speaking
-            user_speaking = any(
-                p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
-                for p in speakers
-            )
-            if user_speaking != user_was_speaking:
-                user_was_speaking = user_speaking
-                session = active_gemini_session.get("session")
-                if session is not None:
-                    if user_speaking:
-                        self.logger.info("User started speaking (LiveKit active speaker VAD) -> sending activity_start")
-                        asyncio.create_task(
-                            session.send_realtime_input(activity_start=types.ActivityStart())
-                        )
-                    else:
-                        self.logger.info("User stopped speaking (LiveKit active speaker VAD) -> sending activity_end")
-                        asyncio.create_task(
-                            session.send_realtime_input(activity_end=types.ActivityEnd())
-                        )
-
         client = settings.client()
         instructions = select_prompt(
             user_context.get("locale", "vi"),
