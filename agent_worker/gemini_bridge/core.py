@@ -114,8 +114,7 @@ class GeminiLiveSettings:
             realtime_input_config=types.RealtimeInputConfig(
                 activity_handling=types.ActivityHandling.NO_INTERRUPTION,
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,
-                    silence_duration_ms=1000,
+                    disabled=True,
                 ),
             ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),

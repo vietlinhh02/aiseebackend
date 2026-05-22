@@ -39,16 +39,20 @@ class NsfwFilter:
 
     def classify_jpeg(self, jpeg_bytes: bytes) -> float:
         """Decode JPEG, run inference, return NSFW score 0.0–1.0."""
-        image = Image.open(BytesIO(jpeg_bytes)).convert("RGB")
-        resized = image.resize((_INPUT_SIZE, _INPUT_SIZE), Image.LANCZOS)
+        try:
+            image = Image.open(BytesIO(jpeg_bytes)).convert("RGB")
+            resized = image.resize((_INPUT_SIZE, _INPUT_SIZE), Image.LANCZOS)
 
-        input_data = np.asarray(resized, dtype=np.float32) / 255.0
-        input_data = np.expand_dims(input_data, axis=0)
+            input_data = np.asarray(resized, dtype=np.float32) / 255.0
+            input_data = np.expand_dims(input_data, axis=0)
 
-        scores = self._session.run(None, {self._input_name: input_data})[0][0]
+            scores = self._session.run(None, {self._input_name: input_data})[0][0]
 
-        nsfw_score = sum(float(scores[i]) for i in _NSFW_INDICES)
-        return float(np.clip(nsfw_score, 0.0, 1.0))
+            nsfw_score = sum(float(scores[i]) for i in _NSFW_INDICES)
+            return float(np.clip(nsfw_score, 0.0, 1.0))
+        except Exception as exc:
+            logger.warning("NSFW classification failed on frame: %s", exc)
+            return 0.0
 
     def is_safe(self, jpeg_bytes: bytes) -> bool:
         return self.classify_jpeg(jpeg_bytes) <= _THRESHOLD

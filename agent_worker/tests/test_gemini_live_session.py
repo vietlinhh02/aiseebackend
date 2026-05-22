@@ -20,7 +20,7 @@ def test_live_settings_build_audio_config_for_gemini_31():
     assert config.thinking_config.thinking_level is types.ThinkingLevel.LOW
     assert (
         config.realtime_input_config.activity_handling
-        is types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+        is types.ActivityHandling.NO_INTERRUPTION
     )
     assert audio_blob.data == b"pcm"
     assert audio_blob.mime_type == "audio/pcm;rate=16000"
