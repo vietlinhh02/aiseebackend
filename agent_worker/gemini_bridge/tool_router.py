@@ -59,6 +59,7 @@ class ToolRouter:
                 result.get("status"),
                 int((time.perf_counter() - started) * 1000),
             )
+            await self._record_tool_call_tracking(name, result)
             return result
         except Exception as exc:
             logger.warning(
@@ -67,7 +68,28 @@ class ToolRouter:
                 int((time.perf_counter() - started) * 1000),
                 exc,
             )
+            await self._record_tool_call_tracking(name, {"status": "error", "error": str(exc)})
             return {"status": "error", "error": str(exc)}
+
+    async def _record_tool_call_tracking(self, name: str, result: dict) -> None:
+        backend = getattr(self, "backend", None)
+        if backend is None:
+            return
+        user_id = self._uid()
+        if not user_id:
+            return
+        try:
+            await backend.record_tracking_event(
+                event_type="ai_tool_call",
+                category="ai_ops",
+                user_id=user_id,
+                metadata={
+                    "tool_name": name,
+                    "status": result.get("status", ""),
+                },
+            )
+        except Exception:
+            pass
 
     def _build_handlers(self) -> dict[str, ToolHandler]:
         handlers: dict[str, ToolHandler] = {

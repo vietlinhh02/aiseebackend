@@ -14,6 +14,8 @@ from google.genai import errors as genai_errors
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
+from config import AI_COST_PRICING_VERSION
+
 from .core import GeminiLiveSettings, GeminiTransportSession
 from .nsfw_filter import NsfwFilter
 from .state import AgentState
@@ -409,8 +411,9 @@ class GeminiBridgeWebSocketService:
         transport = GeminiBridgeWebSocketTransport(websocket=websocket, log=self.log)
         session_context = await transport.read_session_init()
         tool_router = self._build_tool_router(transport, session_context)
+        backend = tool_router.backend
         usage_tracker = AIUsageSessionTracker(
-            backend=tool_router.backend,
+            backend=backend,
             session_context=session_context,
             log=self.log,
         )
@@ -422,8 +425,32 @@ class GeminiBridgeWebSocketService:
             tool_router=tool_router,
             nsfw_filter=_load_nsfw_filter_for_service(self.log),
         )
+        user_id = str(session_context.get("user_id") or "")
+        source_id = str(session_context.get("session_id") or "")
+        session_started_at: datetime | None = None
+        session_failed = False
+
+        async def _emit_tracking(backend_client, event_type: str) -> None:
+            if not user_id:
+                return
+            try:
+                await backend_client.record_tracking_event(
+                    event_type=event_type,
+                    category="ai_ops",
+                    user_id=user_id,
+                    metadata={
+                        "session_id": source_id,
+                        "engine": "websocket",
+                        "model": self.settings.model,
+                    },
+                )
+            except Exception:
+                pass
+
         try:
             try:
+                session_started_at = datetime.now(timezone.utc)
+                await _emit_tracking(backend, "ai_session_started")
                 await self._run_gemini_session(
                     live_session,
                     session_context,
@@ -436,6 +463,7 @@ class GeminiBridgeWebSocketService:
                     "gemini google_search unavailable; retrying without search error=%s",
                     exc,
                 )
+                await _emit_tracking(backend, "ai_quota_fallback")
                 with suppress(Exception):
                     await transport.emit_error(
                         "gemini_search_unavailable",
@@ -450,16 +478,27 @@ class GeminiBridgeWebSocketService:
                     enable_google_search=False,
                 )
         except Exception as exc:
+            session_failed = True
             code = _session_error_code(exc)
             self.log.warning("assistant session failed code=%s error=%s", code, exc)
+            await _emit_tracking(backend, "ai_session_failed")
             with suppress(Exception):
                 await transport.emit_state(AgentState.ERROR)
             with suppress(Exception):
                 await transport.emit_error(code, _session_error_message(exc))
+        else:
+            await _emit_tracking(backend, "ai_session_ended")
         finally:
             with suppress(Exception):
                 await transport.emit_state(AgentState.DISCONNECTED)
             await usage_tracker.commit()
+            if user_id and source_id and session_started_at:
+                await self._record_ws_ai_cost(
+                    backend=backend,
+                    user_id=user_id,
+                    source_id=source_id,
+                    started_at=session_started_at,
+                )
             await self._close_tool_router_backend(tool_router)
             await transport.close()
 
@@ -479,6 +518,42 @@ class GeminiBridgeWebSocketService:
             enable_google_search=enable_google_search,
         ) as gemini_session:
             await live_session.run(gemini_session)
+
+    async def _record_ws_ai_cost(
+        self,
+        *,
+        backend,
+        user_id: str,
+        source_id: str,
+        started_at: datetime,
+    ) -> None:
+        ended_at = datetime.now(timezone.utc)
+        duration_seconds = max(
+            0.0,
+            (ended_at - started_at).total_seconds(),
+        )
+        try:
+            await backend.record_ai_cost(
+                user_id=user_id,
+                provider="google",
+                model=self.settings.model,
+                modality="live_audio",
+                source="agent",
+                source_id=source_id,
+                cost_usd=0,
+                cost_vnd=0,
+                estimated=True,
+                pricing_version=AI_COST_PRICING_VERSION,
+                occurred_at=ended_at.isoformat(),
+                audio_input_seconds=duration_seconds,
+                metadata={
+                    "engine": "websocket",
+                    "session_id": source_id,
+                    "duration_seconds": duration_seconds,
+                },
+            )
+        except Exception as exc:
+            self.log.warning("record_ws_ai_cost failed: %s", exc)
 
     def _build_tool_router(
         self,

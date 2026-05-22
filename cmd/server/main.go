@@ -118,6 +118,23 @@ func main() {
 	assistantBridge := assistant.NewWebSocketBridge(os.Getenv("ASSISTANT_BRIDGE_URL"))
 	assistantService := assistant.NewServiceWithBridge(jwtSecret, assistantBridge).WithUserService(userService)
 	trackingService := tracking.NewService(tracking.NewPgxStore(pool))
+	assistantBridge.OnReconnect = func(attempt int, userID, sessionID string) {
+		go func() {
+			if _, err := trackingService.RecordEvent(context.Background(), tracking.EventInput{
+				EventType: "ai_reconnect",
+				Category:  "ai_ops",
+				UserID:    userID,
+				Source:    "assistant_bridge",
+				SourceID:  sessionID,
+				Metadata: map[string]any{
+					"session_id": sessionID,
+					"attempt":    attempt,
+				},
+			}); err != nil {
+				slog.Warn("tracking reconnect event failed", "error", err)
+			}
+		}()
+	}
 	assistantHandler := assistant.NewHandlerWithTracking(assistantService, trackingService)
 
 	userHandler := user.NewHandler(userService)

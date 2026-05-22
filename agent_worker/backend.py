@@ -231,5 +231,31 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def record_tracking_event(
+        self,
+        event_type: str,
+        category: str,
+        user_id: str = "",
+        metadata: dict | None = None,
+    ) -> dict:
+        """Record a tracking event for admin observability."""
+        resp = await self.client.post(
+            "/tracking/events",
+            json={
+                "event_type": event_type,
+                "category": category,
+                "user_id": user_id,
+                "metadata": metadata or {},
+            },
+            headers={"X-Internal-Key": self.api_key},
+        )
+        if resp.status_code >= 400:
+            logger.warning(
+                "record_tracking_event %s failed: %d %s",
+                event_type, resp.status_code, resp.text,
+            )
+        resp.raise_for_status()
+        return resp.json()
+
     async def close(self):
         await self.client.aclose()

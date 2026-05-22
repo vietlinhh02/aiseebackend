@@ -148,6 +148,19 @@ class GoogleSDKBridge:
                         )
                     except Exception as exc:
                         self.logger.warning("start ai usage session failed: %s", exc)
+                    try:
+                        await backend.record_tracking_event(
+                            event_type="ai_session_started",
+                            category="ai_ops",
+                            user_id=user_context["user_id"],
+                            metadata={
+                                "session_id": room.name,
+                                "engine": "google_sdk",
+                                "model": settings.model,
+                            },
+                        )
+                    except Exception:
+                        pass
                 self._wire_track_subscription(room, gemini_session, settings, track_tasks, nsfw_filter)
                 receive_task = asyncio.create_task(
                     self._receive_loop(
@@ -182,6 +195,20 @@ class GoogleSDKBridge:
                         task.result()
         except Exception:
             await publish_agent_state(local, AgentState.ERROR, self.logger)
+            if user_context.get("user_id"):
+                try:
+                    await backend.record_tracking_event(
+                        event_type="ai_session_failed",
+                        category="ai_ops",
+                        user_id=user_context["user_id"],
+                        metadata={
+                            "session_id": room.name,
+                            "engine": "google_sdk",
+                            "model": settings.model,
+                        },
+                    )
+                except Exception:
+                    pass
             raise
         finally:
             ended_at_time = datetime.now(timezone.utc)
@@ -215,6 +242,20 @@ class GoogleSDKBridge:
                     )
                 except Exception as exc:
                     self.logger.warning("record ai cost event failed: %s", exc)
+            if user_context.get("user_id"):
+                try:
+                    await backend.record_tracking_event(
+                        event_type="ai_session_ended",
+                        category="ai_ops",
+                        user_id=user_context["user_id"],
+                        metadata={
+                            "session_id": room.name,
+                            "engine": "google_sdk",
+                            "model": settings.model,
+                        },
+                    )
+                except Exception:
+                    pass
             await publish_agent_state(local, AgentState.DISCONNECTED, self.logger)
             await audio_publisher.close()
             await backend.close()

@@ -30,11 +30,14 @@ type wsDialFunc func(context.Context, string, *websocket.DialOptions) (*websocke
 
 type NoopBridge struct{}
 
+type ReconnectCallback func(attempt int, userID, sessionID string)
+
 type WebSocketBridge struct {
 	upstreamURL   string
 	dial          wsDialFunc
 	cameraBlocked atomic.Bool
 	MaxRetries    int
+	OnReconnect   ReconnectCallback
 }
 
 type proxyResult struct {
@@ -95,6 +98,10 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 			_ = writeBridgeError(ioCtx, clientConn, "assistant_unavailable", fmt.Sprintf("assistant service unavailable after %d retries", b.MaxRetries))
 			_ = clientConn.Close(websocket.StatusNormalClosure, "assistant unavailable")
 			return lastUpstreamErr
+		}
+
+		if attempt > 0 && b.OnReconnect != nil {
+			b.OnReconnect(attempt, session.UserID, session.SessionID)
 		}
 
 		proxyCtx, cancel := context.WithCancel(ctx)
