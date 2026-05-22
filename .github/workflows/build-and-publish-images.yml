@@ -100,3 +100,23 @@ jobs:
             ${{ steps.image.outputs.image }}:${{ steps.image.outputs.sha_tag }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Trigger Coolify Redeployment
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          if [ "${{ matrix.service }}" == "backend" ]; then
+            if [ -n "${{ secrets.COOLIFY_BACKEND_WEBHOOK_URL }}" ]; then
+              echo "Triggering Coolify Backend Redeployment..."
+              curl -i -X GET "${{ secrets.COOLIFY_BACKEND_WEBHOOK_URL }}"
+            else
+              echo "COOLIFY_BACKEND_WEBHOOK_URL secret not set. Skipping trigger."
+            fi
+          elif [ "${{ matrix.service }}" == "agent" ]; then
+            if [ -n "${{ secrets.COOLIFY_AGENT_WEBHOOK_URL }}" ]; then
+              echo "Triggering Coolify Agent Redeployment..."
+              curl -i -X GET "${{ secrets.COOLIFY_AGENT_WEBHOOK_URL }}"
+            else
+              echo "COOLIFY_AGENT_WEBHOOK_URL secret not set. Skipping trigger."
+            fi
+          fi

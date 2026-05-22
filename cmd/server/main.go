@@ -93,6 +93,7 @@ func main() {
 		SecretKey:      os.Getenv("S3_SECRET_KEY"),
 		Bucket:         os.Getenv("S3_BUCKET"),
 		UseSSL:         os.Getenv("S3_USE_SSL") == "true",
+		SkipBucketPath: os.Getenv("S3_SKIP_BUCKET_PATH") == "true",
 	})
 	if err != nil {
 		slog.Error("storage client init failed", "error", err)

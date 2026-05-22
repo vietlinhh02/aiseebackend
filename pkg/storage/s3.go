@@ -17,6 +17,7 @@ type Client struct {
 	endpoint       string
 	publicEndpoint string
 	useSSL         bool
+	skipBucketPath bool
 }
 
 type Config struct {
@@ -26,10 +27,16 @@ type Config struct {
 	SecretKey      string
 	Bucket         string
 	UseSSL         bool
+	SkipBucketPath bool
 }
 
 func NewClient(cfg Config) (*Client, error) {
-	mc, err := minio.New(cfg.Endpoint, &minio.Options{
+	endpoint := cfg.Endpoint
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimSuffix(endpoint, "/")
+
+	mc, err := minio.New(endpoint, &minio.Options{
 		Creds: credentials.NewStaticV4(
 			cfg.AccessKey, cfg.SecretKey, "",
 		),
@@ -42,9 +49,10 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{
 		minio:          mc,
 		bucket:         cfg.Bucket,
-		endpoint:       cfg.Endpoint,
+		endpoint:       endpoint,
 		publicEndpoint: cfg.PublicEndpoint,
 		useSSL:         cfg.UseSSL,
+		skipBucketPath: cfg.SkipBucketPath,
 	}, nil
 }
 
@@ -102,6 +110,13 @@ func (c *Client) Upload(
 
 func (c *Client) buildURL(key string) string {
 	if strings.Contains(c.publicEndpoint, "://") {
+		if c.skipBucketPath {
+			return fmt.Sprintf(
+				"%s/%s",
+				strings.TrimRight(c.publicEndpoint, "/"),
+				key,
+			)
+		}
 		return fmt.Sprintf(
 			"%s/%s/%s",
 			strings.TrimRight(c.publicEndpoint, "/"),
@@ -118,6 +133,12 @@ func (c *Client) buildURL(key string) string {
 	scheme := "http"
 	if c.useSSL {
 		scheme = "https"
+	}
+
+	if c.skipBucketPath {
+		return fmt.Sprintf(
+			"%s://%s/%s", scheme, endpoint, key,
+		)
 	}
 	return fmt.Sprintf(
 		"%s://%s/%s/%s", scheme, endpoint, c.bucket, key,
