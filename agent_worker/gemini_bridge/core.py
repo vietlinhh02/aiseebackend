@@ -115,7 +115,7 @@ class GeminiLiveSettings:
                 activity_handling=types.ActivityHandling.NO_INTERRUPTION,
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False,
-                    silence_duration_ms=1000,
+                    silence_duration_ms=300,
                 ),
             ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),
