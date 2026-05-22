@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -15,8 +16,12 @@ import (
 )
 
 const (
-	DefaultBridgeURL = "ws://127.0.0.1:8765/ws"
-	BridgeReadLimit  = 8 << 20
+	DefaultBridgeURL        = "ws://127.0.0.1:8765/ws"
+	BridgeReadLimit         = 8 << 20
+	maxUpstreamRetries      = 8
+	upstreamBackoffBaseSec  = 1
+	upstreamBackoffMaxSec   = 30
+	upstreamBackoffJitterPct = 0.5
 )
 
 var errBridgeNotConfigured = errors.New("assistant bridge not configured")
@@ -29,6 +34,7 @@ type WebSocketBridge struct {
 	upstreamURL   string
 	dial          wsDialFunc
 	cameraBlocked atomic.Bool
+	MaxRetries    int
 }
 
 type proxyResult struct {
@@ -36,7 +42,7 @@ type proxyResult struct {
 	err    error
 }
 
-func NewWebSocketBridge(upstreamURL string) Bridge {
+func NewWebSocketBridge(upstreamURL string) *WebSocketBridge {
 	upstreamURL = strings.TrimSpace(upstreamURL)
 	if upstreamURL == "" {
 		upstreamURL = DefaultBridgeURL
@@ -45,6 +51,7 @@ func NewWebSocketBridge(upstreamURL string) Bridge {
 	return &WebSocketBridge{
 		upstreamURL: upstreamURL,
 		dial:        websocket.Dial,
+		MaxRetries:  maxUpstreamRetries,
 	}
 }
 
@@ -59,59 +66,98 @@ func (NoopBridge) Proxy(ctx context.Context, _ Session, clientConn *websocket.Co
 
 func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn *websocket.Conn) error {
 	clientConn.SetReadLimit(BridgeReadLimit)
+	b.cameraBlocked.Store(false)
 
+	var lastUpstreamErr error
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			delay := upstreamRetryDelay(attempt - 1)
+			if attempt > b.MaxRetries {
+				delay = 0
+			}
+			if delay > 0 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(delay):
+				}
+			}
+		}
+
+		upstreamConn, err := b.dialUpstream(ctx, session)
+		if err != nil {
+			lastUpstreamErr = err
+			if attempt < b.MaxRetries {
+				continue
+			}
+			ioCtx, ioCancel := backgroundIOContext()
+			defer ioCancel()
+			_ = writeBridgeError(ioCtx, clientConn, "assistant_unavailable", fmt.Sprintf("assistant service unavailable after %d retries", b.MaxRetries))
+			_ = clientConn.Close(websocket.StatusNormalClosure, "assistant unavailable")
+			return lastUpstreamErr
+		}
+
+		proxyCtx, cancel := context.WithCancel(ctx)
+		results := make(chan proxyResult, 2)
+		go b.proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
+		go b.proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
+
+		result := <-results
+		cancel()
+
+		if result.source == "client" {
+			upstreamConn.Close(websocket.StatusNormalClosure, "client disconnected")
+			_ = drainProxyResult(results)
+			if isNormalClientDisconnect(result.err) {
+				return nil
+			}
+			return result.err
+		}
+
+		lastUpstreamErr = result.err
+
+		if attempt < b.MaxRetries {
+			upstreamConn.CloseNow()
+			_ = drainProxyResult(results)
+			continue
+		}
+
+		ioCtx, ioCancel := backgroundIOContext()
+		defer ioCancel()
+
+		_ = writeBridgeError(ioCtx, clientConn, "assistant_upstream_disconnected", upstreamDisconnectMessage(lastUpstreamErr))
+		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant disconnected")
+		upstreamConn.CloseNow()
+		_ = drainProxyResult(results)
+		return lastUpstreamErr
+	}
+}
+
+func (b *WebSocketBridge) dialUpstream(ctx context.Context, session Session) (*websocket.Conn, error) {
 	upstreamConn, _, err := b.dial(ctx, b.upstreamURL, nil)
 	if err != nil {
-		ioCtx, cancel := backgroundIOContext()
-		defer cancel()
-
-		_ = writeBridgeError(ioCtx, clientConn, "assistant_unavailable", "assistant service unavailable")
-		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant unavailable")
-		return fmt.Errorf("dial assistant bridge: %w", err)
+		return nil, fmt.Errorf("dial assistant bridge: %w", err)
 	}
-	defer upstreamConn.CloseNow()
 	upstreamConn.SetReadLimit(BridgeReadLimit)
 
 	if err := wsjson.Write(ctx, upstreamConn, sessionInitEnvelope(session)); err != nil {
-		ioCtx, cancel := backgroundIOContext()
-		defer cancel()
-
-		_ = writeBridgeError(ioCtx, clientConn, "assistant_init_failed", "assistant initialization failed")
-		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant initialization failed")
-		return fmt.Errorf("send assistant init frame: %w", err)
+		upstreamConn.CloseNow()
+		return nil, fmt.Errorf("send assistant init frame: %w", err)
 	}
 
 	b.cameraBlocked.Store(false)
+	return upstreamConn, nil
+}
 
-	proxyCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	results := make(chan proxyResult, 2)
-	go b.proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
-	go b.proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
-
-	result := <-results
-	cancel()
-
-	switch result.source {
-	case "upstream":
-		ioCtx, cancel := backgroundIOContext()
-		defer cancel()
-
-		_ = writeBridgeError(ioCtx, clientConn, "assistant_upstream_disconnected", upstreamDisconnectMessage(result.err))
-		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant disconnected")
-		_ = drainProxyResult(results)
-		return result.err
-	case "client":
-		_ = upstreamConn.Close(websocket.StatusNormalClosure, "client disconnected")
-		_ = drainProxyResult(results)
-		if isNormalClientDisconnect(result.err) {
-			return nil
-		}
-		return result.err
-	default:
-		return result.err
+func upstreamRetryDelay(attempt int) time.Duration {
+	base := 1 << attempt
+	if base > upstreamBackoffMaxSec {
+		base = upstreamBackoffMaxSec
 	}
+	baseDur := time.Duration(base) * time.Second
+	jitter := time.Duration(float64(baseDur) * upstreamBackoffJitterPct * rand.Float64())
+
+	return baseDur + jitter
 }
 
 func (b *WebSocketBridge) proxyFrames(ctx context.Context, source string, src, dst *websocket.Conn, results chan<- proxyResult) {
@@ -122,13 +168,11 @@ func (b *WebSocketBridge) proxyFrames(ctx context.Context, source string, src, d
 			return
 		}
 
-		// L2: Camera block latch — drop JPEG binary frames when blocked,
-		// detect nsfw_detected / camera re-enable from text frames.
 		if source == "client" {
 			if msgType == websocket.MessageBinary {
 				if b.cameraBlocked.Load() && len(payload) >= 2 &&
 					payload[0] == 0xFF && payload[1] == 0xD8 {
-					continue // drop JPEG frame
+					continue
 				}
 			} else if msgType == websocket.MessageText {
 				if bytes.Contains(payload, []byte(`"nsfw_detected"`)) {

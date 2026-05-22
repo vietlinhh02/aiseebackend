@@ -259,7 +259,9 @@ func TestWebSocketProxyAcceptsCameraSizedBinaryFrames(t *testing.T) {
 		return nil
 	})
 
-	server := httptest.NewServer(newTestRouterWithBridge(secret, NewWebSocketBridge(upstreamURL)))
+	bridge := NewWebSocketBridge(upstreamURL)
+	bridge.MaxRetries = 0
+	server := httptest.NewServer(newTestRouterWithBridge(secret, bridge))
 	defer server.Close()
 
 	token := signedSessionToken(t, secret, "user-123", "user", "ai-session-camera")
@@ -299,7 +301,9 @@ func TestWebSocketProxySurfacesUpstreamDisconnect(t *testing.T) {
 		return conn.Close(websocket.StatusGoingAway, "assistant offline")
 	})
 
-	server := httptest.NewServer(newTestRouterWithBridge(secret, NewWebSocketBridge(upstreamURL)))
+	bridge := NewWebSocketBridge(upstreamURL)
+	bridge.MaxRetries = 0
+	server := httptest.NewServer(newTestRouterWithBridge(secret, bridge))
 	defer server.Close()
 
 	token := signedSessionToken(t, secret, "user-123", "user", "ai-session-disconnect")
