@@ -189,10 +189,10 @@ func main() {
 
 	careStore := care.NewStore(pool)
 	careService := care.NewService(careStore, billingService)
-	careHandler := care.NewHandler(careService, userService)
+	careHandler := care.NewHandler(careService, userService, trackingService)
 
 	emergService := emergency.NewService(
-		queries, pusher, lkClient, care.NewEmergencySOSHook(careStore),
+		queries, pusher, lkClient, care.NewEmergencySOSHook(careStore), trackingService,
 	)
 	musicService := music.NewService(publicBaseURL())
 
@@ -214,6 +214,7 @@ func main() {
 		volService,
 		billingService,
 		queries,
+		trackingService,
 	)
 
 	adminStore := admin.NewStore(pool)

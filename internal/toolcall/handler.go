@@ -20,6 +20,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/health"
 	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/music"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/internal/volunteer"
 	"github.com/team-dang/aiseebackend/pkg/i18n"
@@ -45,6 +46,7 @@ type Handler struct {
 	volunteer   *volunteer.Service
 	billing     usageService
 	queries     *dbgen.Queries
+	tracking    *tracking.Service
 }
 
 type usageService interface {
@@ -64,6 +66,7 @@ func NewHandler(
 	volSvc *volunteer.Service,
 	billingSvc usageService,
 	queries *dbgen.Queries,
+	trackingSvc *tracking.Service,
 ) *Handler {
 	return &Handler{
 		chat:        chatSvc,
@@ -77,6 +80,7 @@ func NewHandler(
 		volunteer:   volSvc,
 		billing:     billingSvc,
 		queries:     queries,
+		tracking:    trackingSvc,
 	}
 }
 
@@ -492,6 +496,10 @@ func (h *Handler) handleMarkMedicationTaken(
 		return nil, fmt.Errorf("mark taken: %w", err)
 	}
 
+	h.recordToolTracking(ctx, "medication_taken", req.UserID, medID, map[string]any{
+		"medicine_name": med.Name,
+	})
+
 	return map[string]any{
 		"status": "taken",
 		"name":   med.Name,
@@ -520,6 +528,10 @@ func (h *Handler) handleMarkMedicationSkipped(
 	if err != nil {
 		return nil, fmt.Errorf("mark skipped: %w", err)
 	}
+
+	h.recordToolTracking(ctx, "medication_skipped", req.UserID, medID, map[string]any{
+		"medicine_name": med.Name,
+	})
 
 	return map[string]any{
 		"status": "skipped",
@@ -660,6 +672,12 @@ func (h *Handler) handleEmergencyAlert(
 		return nil, err
 	}
 
+	h.recordToolTracking(ctx, "emergency_triggered", req.UserID, result.RoomName, map[string]any{
+		"lat":             lat,
+		"lng":             lng,
+		"family_notified": result.FamilyNotified,
+	})
+
 	return map[string]any{
 		"status":          "alert_sent",
 		"room_name":       result.RoomName,
@@ -692,6 +710,11 @@ func (h *Handler) handleEscalateToFamily(
 	if err != nil {
 		return nil, err
 	}
+
+	h.recordToolTracking(ctx, "family_notified", req.UserID, result.RoomName, map[string]any{
+		"contact_name": result.ContactName,
+		"remaining":    len(result.Remaining),
+	})
 
 	resp := map[string]any{
 		"status": result.Status,
@@ -1050,4 +1073,25 @@ func (h *Handler) logAudit(
 		Params:   paramsJSON,
 		Result:   pgtype.Text{String: resultStr, Valid: true},
 	})
+}
+
+func (h *Handler) recordToolTracking(ctx context.Context, eventType, userID, sourceID string, meta map[string]any) {
+	if h.tracking == nil {
+		return
+	}
+	go func() {
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		if _, err := h.tracking.RecordEvent(context.Background(), tracking.EventInput{
+			EventType: eventType,
+			Category:  "safety_care",
+			UserID:    userID,
+			Source:    "toolcall_handler",
+			SourceID:  sourceID,
+			Metadata:  meta,
+		}); err != nil {
+			slog.Error("record toolcall tracking event", "event_type", eventType, "error", err)
+		}
+	}()
 }

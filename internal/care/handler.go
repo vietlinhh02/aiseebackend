@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -47,15 +48,17 @@ type careService interface {
 }
 
 type Handler struct {
-	svc     careService
-	checker middleware.FamilyChecker
+	svc      careService
+	checker  middleware.FamilyChecker
+	tracking *tracking.Service
 }
 
 func NewHandler(
 	svc careService,
 	checker middleware.FamilyChecker,
+	trackingSvc *tracking.Service,
 ) *Handler {
-	return &Handler{svc: svc, checker: checker}
+	return &Handler{svc: svc, checker: checker, tracking: trackingSvc}
 }
 
 func (h *Handler) Timeline(

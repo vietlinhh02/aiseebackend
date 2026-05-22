@@ -85,7 +85,7 @@ func (f *fakeHandlerService) ExportPDF(
 }
 
 func TestHandlerTimelineReturnsForbiddenWithoutFamilyAccess(t *testing.T) {
-	h := NewHandler(&fakeHandlerService{}, &fakeFamilyChecker{})
+	h := NewHandler(&fakeHandlerService{}, &fakeFamilyChecker{}, nil)
 	req := withCareRouteContext(
 		httptest.NewRequest(http.MethodGet, "/timeline", nil),
 		"user-1",
@@ -108,7 +108,7 @@ func TestHandlerDailyBriefMapsEntitlementErrors(t *testing.T) {
 			Code:    "entitlement_required",
 			Message: "upgrade required",
 		},
-	}, &fakeFamilyChecker{linked: true})
+	}, &fakeFamilyChecker{linked: true}, nil)
 	req := withCareRouteContext(
 		httptest.NewRequest(http.MethodGet, "/daily-brief", nil),
 		"user-1",
@@ -125,7 +125,7 @@ func TestHandlerDailyBriefMapsEntitlementErrors(t *testing.T) {
 }
 
 func TestHandlerExportPDFRejectsInvalidJSON(t *testing.T) {
-	h := NewHandler(&fakeHandlerService{}, &fakeFamilyChecker{linked: true})
+	h := NewHandler(&fakeHandlerService{}, &fakeFamilyChecker{linked: true}, nil)
 	req := withCareRouteContext(
 		httptest.NewRequest(
 			http.MethodPost,
@@ -153,7 +153,7 @@ func TestHandlerExportPDFReturnsStructuredPlaceholder(t *testing.T) {
 			Format:        "pdf_placeholder",
 			UsageRecordID: "usage-1",
 		},
-	}, &fakeFamilyChecker{linked: true})
+	}, &fakeFamilyChecker{linked: true}, nil)
 	body, _ := json.Marshal(ExportPDFRequest{ReportType: "weekly_report"})
 	req := withCareRouteContext(
 		httptest.NewRequest(
@@ -184,7 +184,7 @@ func TestHandlerExportPDFReturnsStructuredPlaceholder(t *testing.T) {
 func TestHandlerTimelineMapsUnexpectedErrors(t *testing.T) {
 	h := NewHandler(&fakeHandlerService{
 		timelineErr: errors.New("boom"),
-	}, &fakeFamilyChecker{linked: true})
+	}, &fakeFamilyChecker{linked: true}, nil)
 	req := withCareRouteContext(
 		httptest.NewRequest(http.MethodGet, "/timeline", nil),
 		"user-1",

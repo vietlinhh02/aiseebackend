@@ -3,11 +3,13 @@ package care
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -82,6 +84,7 @@ func (h *Handler) AckAlert(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err, "alert_ack_failed")
 		return
 	}
+	h.recordSafetyEvent(r.Context(), "alert.acknowledged", caredID, requesterID, alertID, nil)
 	response.JSON(w, http.StatusOK, map[string]string{"status": "acknowledged"})
 }
 
@@ -106,6 +109,7 @@ func (h *Handler) ResolveAlert(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err, "alert_resolve_failed")
 		return
 	}
+	h.recordSafetyEvent(r.Context(), "alert.resolved", caredID, requesterID, alertID, nil)
 	response.JSON(w, http.StatusOK, map[string]string{"status": "resolved"})
 }
 
@@ -240,6 +244,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err, "task_complete_failed")
 		return
 	}
+	h.recordSafetyEvent(r.Context(), "task.completed", caredID, requesterID, taskID, nil)
 	response.JSON(w, http.StatusOK, map[string]string{"status": "completed"})
 }
 
@@ -325,4 +330,26 @@ func (h *Handler) RunPatterns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) recordSafetyEvent(ctx context.Context, eventType, caredID, actorID, sourceID string, meta map[string]any) {
+	if h.tracking == nil {
+		return
+	}
+	go func() {
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		if _, err := h.tracking.RecordEvent(context.Background(), tracking.EventInput{
+			EventType: eventType,
+			Category:  "safety_care",
+			UserID:    caredID,
+			ActorID:   actorID,
+			Source:    "care_handler",
+			SourceID:  sourceID,
+			Metadata:  meta,
+		}); err != nil {
+			slog.Error("record care tracking event", "event_type", eventType, "error", err)
+		}
+	}()
 }

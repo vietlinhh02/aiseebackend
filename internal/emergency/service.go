@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/pkg/i18n"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
@@ -44,6 +45,7 @@ type Service struct {
 	lk        *lk.Client
 	lastAlert sync.Map
 	hook      SOSDomainHook
+	tracking  *tracking.Service
 }
 
 func NewService(
@@ -51,15 +53,17 @@ func NewService(
 	pusher *push.Pusher,
 	lkClient *lk.Client,
 	hook SOSDomainHook,
+	trackingSvc *tracking.Service,
 ) *Service {
 	if hook == nil {
 		hook = noopSOSHook{}
 	}
 	return &Service{
-		queries: queries,
-		pusher:  pusher,
-		lk:      lkClient,
-		hook:    hook,
+		queries:  queries,
+		pusher:   pusher,
+		lk:       lkClient,
+		hook:     hook,
+		tracking: trackingSvc,
 	}
 }
 
@@ -145,6 +149,12 @@ func (s *Service) Alert(
 	}
 
 	s.lastAlert.Store(userID, time.Now())
+
+	s.recordSOSTracking(ctx, "emergency_triggered", userID, roomName, map[string]any{
+		"lat":             lat,
+		"lng":             lng,
+		"family_notified": notified,
+	})
 
 	if err := s.hook.OnSOSAlert(ctx, userID, roomName, lat, lng, notified); err != nil {
 		slog.Error("sos domain hook", "user_id", userID, "error", err)
@@ -251,6 +261,12 @@ func (s *Service) Escalate(
 		},
 	})
 
+	s.recordSOSTracking(ctx, "family_notified", userID, roomName, map[string]any{
+		"target_name": target.DisplayName,
+		"target_id":   pgutil.PgUUIDToString(target.ID),
+		"remaining":   len(remaining),
+	})
+
 	if err := s.hook.OnSOSFamilyEscalation(
 		ctx, userID, roomName, target.DisplayName, "notified", remaining,
 	); err != nil {
@@ -327,4 +343,25 @@ func normalizeVN(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func (s *Service) recordSOSTracking(ctx context.Context, eventType, userID, sourceID string, meta map[string]any) {
+	if s.tracking == nil {
+		return
+	}
+	go func() {
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		if _, err := s.tracking.RecordEvent(context.Background(), tracking.EventInput{
+			EventType: eventType,
+			Category:  "safety_care",
+			UserID:    userID,
+			Source:    "emergency_service",
+			SourceID:  sourceID,
+			Metadata:  meta,
+		}); err != nil {
+			slog.Error("record sos tracking event", "event_type", eventType, "error", err)
+		}
+	}()
 }
