@@ -2,7 +2,10 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/team-dang/aiseebackend/internal/billing"
 )
 
 type fakeAdminStore struct {
@@ -103,8 +106,90 @@ func (f *fakeAdminStore) ListUserBillingTransactions(
 	return f.userResult, nil
 }
 
+func (f *fakeAdminStore) ListIncidentsForAdmin(context.Context, string, int32) ([]AdminIncidentListItem, error) {
+	return nil, nil
+}
+
+func (f *fakeAdminStore) ListCareAlertsForAdmin(context.Context, string, int32) ([]AdminCareAlertListItem, error) {
+	return nil, nil
+}
+
+func (f *fakeAdminStore) InsertBillingRefundNote(context.Context, string, string, string) error {
+	return nil
+}
+
 func (f *fakeAdminStore) IsAdmin(context.Context, string) (bool, error) {
 	return true, nil
+}
+
+type fakeUsageGranter struct {
+	last billing.UsageGrantInput
+}
+
+func (f *fakeUsageGranter) GrantUsageQuota(
+	_ context.Context,
+	in billing.UsageGrantInput,
+) (billing.UsageGrant, error) {
+	f.last = in
+	return billing.UsageGrant{
+		ID:        "grant-test-1",
+		UserID:    in.UserID,
+		UsageType: in.UsageType,
+		Quantity:  in.Quantity,
+		Unit:      in.Unit,
+		Reason:    in.Reason,
+		Source:    in.Source,
+		SourceID:  in.SourceID,
+	}, nil
+}
+
+func TestManualGrantUsageUnconfiguredReturnsSentinel(t *testing.T) {
+	t.Parallel()
+	svc := NewService(&fakeAdminStore{}, nil)
+	_, err := svc.ManualGrantUsage(
+		context.Background(),
+		"admin-1",
+		"00000000-0000-0000-0000-000000000001",
+		ManualGrantInput{
+			UsageType: string(billing.UsageCareCoachQuestions),
+			Quantity:  1,
+			Unit:      "questions",
+			Reason:    "test",
+		},
+	)
+	if !errors.Is(err, ErrManualGrantBillingDisabled) {
+		t.Fatalf("want ErrManualGrantBillingDisabled, got %v", err)
+	}
+}
+
+func TestManualGrantUsageForwardsToGranter(t *testing.T) {
+	t.Parallel()
+	g := &fakeUsageGranter{}
+	svc := NewService(&fakeAdminStore{}, g)
+	grant, err := svc.ManualGrantUsage(
+		context.Background(),
+		"admin-9",
+		"00000000-0000-0000-0000-000000000002",
+		ManualGrantInput{
+			UsageType: string(billing.UsageCareCoachQuestions),
+			Quantity:  3,
+			Unit:      "questions",
+			Reason:    "support ticket",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ManualGrantUsage: %v", err)
+	}
+	if grant.ID != "grant-test-1" {
+		t.Fatalf("grant id = %q", grant.ID)
+	}
+	if g.last.UserID != "00000000-0000-0000-0000-000000000002" ||
+		g.last.UsageType != billing.UsageCareCoachQuestions ||
+		g.last.Quantity != 3 ||
+		g.last.Source != "admin" ||
+		g.last.GrantedByID != "admin-9" {
+		t.Fatalf("unexpected granter input: %+v", g.last)
+	}
 }
 
 func TestServiceListBillingTransactions(t *testing.T) {
@@ -113,7 +198,7 @@ func TestServiceListBillingTransactions(t *testing.T) {
 	store := &fakeAdminStore{
 		listResult: []AdminBillingTransaction{{ID: "txn-1"}},
 	}
-	svc := NewService(store)
+	svc := NewService(store, nil)
 
 	got, err := svc.ListBillingTransactions(context.Background(), 3, 50)
 	if err != nil {
@@ -133,7 +218,7 @@ func TestServiceListUserBillingTransactions(t *testing.T) {
 	store := &fakeAdminStore{
 		userResult: []AdminBillingTransaction{{ID: "txn-2"}},
 	}
-	svc := NewService(store)
+	svc := NewService(store, nil)
 
 	got, err := svc.ListUserBillingTransactions(context.Background(), "user-7", 2, 25)
 	if err != nil {
@@ -161,7 +246,7 @@ func TestServiceGetTrackingSummaryDefaultsWindow(t *testing.T) {
 			AISessionsFailed:  2,
 		},
 	}
-	svc := NewService(store)
+	svc := NewService(store, nil)
 
 	got, err := svc.GetTrackingSummary(context.Background(), 0)
 	if err != nil {

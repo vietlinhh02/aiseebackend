@@ -9,9 +9,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from camera_activation_policy import validate_camera_activation_consent
+
 from .transport import DeviceCommandChannel
 
 logger = logging.getLogger("aisee-agent")
+SUPPORT_CALL_BACKEND_TIMEOUT_SECONDS = 45.0
+CALL_START_TIMEOUT_PADDING_SECONDS = 10.0
 
 MUSIC_DISABLED_RESULT = {
     "status": "disabled",
@@ -78,6 +82,11 @@ class ToolRouter:
         )
         handlers.update(
             {
+                "make_voice_call": self._family_call_alias("voice"),
+                "make_video_call": self._family_call_alias("video"),
+                "call_family_contact": self._call_family_contact,
+                "call_support_contact": self._call_support_contact,
+                "escalate_to_volunteer": self._call_support_contact_alias,
                 "activate_camera": self._activate_camera,
                 "deactivate_camera": self._deactivate_camera,
                 "set_medication_reminder": self._schedule_handler(
@@ -87,12 +96,15 @@ class ToolRouter:
                     "set_appointment_reminder"
                 ),
                 "emergency_alert": self._emergency_alert,
+                "escalate_to_family": self._escalate_to_family,
                 "control_music": self._music_disabled,
                 "navigate_to": self._navigate_to,
                 "web_search": self._web_search,
                 "get_location": self._get_location,
                 "get_current_location": self._get_location,
                 "update_location": self._update_location,
+                "answer_incoming_call": self._answer_incoming_call,
+                "decline_incoming_call": self._decline_incoming_call,
             }
         )
         return handlers
@@ -110,6 +122,14 @@ class ToolRouter:
     def _schedule_handler(self, name: str) -> ToolHandler:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             return await self._backend_with_schedule_action(name, args)
+
+        return handler
+
+    def _family_call_alias(self, call_type: str) -> ToolHandler:
+        async def handler(args: dict[str, Any]) -> dict[str, Any]:
+            payload = dict(args)
+            payload["call_type"] = call_type
+            return await self._call_family_contact(payload)
 
         return handler
 
@@ -153,6 +173,21 @@ class ToolRouter:
 
     async def _activate_camera(self, args: dict[str, Any]) -> dict[str, Any]:
         reason = args.get("reason", "User requested")
+        consent_phrase = str(args.get("consent_phrase") or "")
+        consent_source = str(args.get("consent_source") or "")
+        allowed, detail = validate_camera_activation_consent(
+            consent_source=consent_source,
+            consent_phrase=consent_phrase,
+        )
+        if not allowed:
+            return {
+                "status": "blocked",
+                "error": detail,
+                "message": (
+                    "Camera chỉ được mở sau khi người dùng nói rõ mở/xem "
+                    "hoặc đã đồng ý rõ ràng."
+                ),
+            }
         source_id = f"camera-{uuid.uuid4()}"
         await self.backend.check_quota(self._uid(), "camera_activations", 1)
         result = await self._device_request("enable_camera", {}, timeout=8.0)
@@ -163,7 +198,11 @@ class ToolRouter:
             "activations",
             "agent",
             source_id,
-            {"reason": reason},
+            {
+                "reason": reason,
+                "consent_source": consent_source,
+                "consent_phrase": consent_phrase,
+            },
         )
         return result
 
@@ -185,6 +224,82 @@ class ToolRouter:
                 logger.warning("schedule_reminder RPC failed: %s", exc)
         return result
 
+    async def _call_family_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        result = await self.backend.tool_call(
+            "call_family_contact",
+            self._uid(),
+            {
+                "contact_name": str(args.get("contact_name") or ""),
+                "call_type": self._normalize_call_type(args.get("call_type")),
+            },
+        )
+        return await self._start_prepared_call(result)
+
+    async def _call_support_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        result = await self.backend.tool_call_with_timeout(
+            "call_support_contact",
+            self._uid(),
+            {
+                "contact_name": str(args.get("contact_name") or ""),
+                "call_type": self._normalize_call_type(args.get("call_type")),
+            },
+            timeout=SUPPORT_CALL_BACKEND_TIMEOUT_SECONDS,
+        )
+        return await self._start_prepared_call(result)
+
+    async def _call_support_contact_alias(self, args: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(args)
+        payload.setdefault("contact_name", "")
+        payload.setdefault("call_type", "voice")
+        return await self._call_support_contact(payload)
+
+    async def _start_prepared_call(self, result: dict[str, Any]) -> dict[str, Any]:
+        status = str(result.get("status") or "")
+        if status != "prepared":
+            return dict(result)
+
+        timeout_seconds = self._call_start_timeout_seconds(result)
+        device_result = await self._device_request(
+            "start_call",
+            {
+                "room_name": result.get("room_name", ""),
+                "token": result.get("token", ""),
+                "call_type": result.get("call_type", "voice"),
+                "contact_id": result.get("contact_id", ""),
+                "contact_name": result.get("contact_name", ""),
+                "contact_role": result.get("contact_role", "family"),
+                "avatar_url": result.get("avatar_url", ""),
+                "answer_timeout_seconds": timeout_seconds,
+            },
+            timeout=timeout_seconds + CALL_START_TIMEOUT_PADDING_SECONDS,
+        )
+        merged = {
+            key: value
+            for key, value in result.items()
+            if key not in {"token", "answer_timeout_seconds"}
+        }
+        merged.update(device_result)
+        merged.setdefault("mode", result.get("mode", "family"))
+        merged.setdefault("call_type", result.get("call_type", "voice"))
+        merged.setdefault("contact_name", result.get("contact_name", ""))
+        return merged
+
+    @staticmethod
+    def _normalize_call_type(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text == "video":
+            return "video"
+        return "voice"
+
+    @staticmethod
+    def _call_start_timeout_seconds(result: dict[str, Any]) -> float:
+        value = result.get("answer_timeout_seconds", 30)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 30.0
+        return parsed if parsed > 0 else 30.0
+
     async def _emergency_alert(self, args: dict[str, Any]) -> dict[str, Any]:
         try:
             location = await self._device_request("get_location", {}, timeout=15.0)
@@ -199,6 +314,23 @@ class ToolRouter:
             {"lat": lat, "lng": lng},
             timeout=20.0,
         )
+
+    async def _escalate_to_family(self, args: dict[str, Any]) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        contact_name = str(args.get("contact_name") or "").strip()
+        if contact_name:
+            params["contact_name"] = contact_name
+        skip = args.get("skip")
+        if isinstance(skip, list):
+            cleaned = [str(s) for s in skip if str(s).strip()]
+            if cleaned:
+                params["skip"] = cleaned
+        result = await self.backend.tool_call(
+            "escalate_to_family",
+            self._uid(),
+            params,
+        )
+        return await self._start_prepared_call(result)
 
     async def _music_disabled(self, args: dict[str, Any]) -> dict[str, Any]:
         return dict(MUSIC_DISABLED_RESULT)
@@ -238,22 +370,24 @@ class ToolRouter:
             {"lat": location.get("lat", 0), "lng": location.get("lng", 0)},
         )
 
+    async def _answer_incoming_call(self, args: dict[str, Any]) -> dict[str, Any]:
+        return await self._device_request("answer_incoming_call", {}, timeout=15.0)
+
+    async def _decline_incoming_call(self, args: dict[str, Any]) -> dict[str, Any]:
+        return await self._device_request("decline_incoming_call", {}, timeout=10.0)
+
 
 BACKEND_TOOLS = {
-    "make_voice_call",
-    "make_video_call",
     "send_chat_message",
     "read_unread_messages",
+    "list_family_contacts",
     "list_medication_reminders",
     "mark_medication_taken",
     "mark_medication_skipped",
     "log_health_symptom",
     "log_health_metric",
     "play_music",
-    "escalate_to_volunteer",
     "rate_volunteer",
 }
 
-BACKEND_TOOL_TIMEOUTS = {
-    "escalate_to_family": 40.0,
-}
+BACKEND_TOOL_TIMEOUTS: dict[str, float] = {}

@@ -54,10 +54,42 @@ TOOL_SPECS = (
         {"contact_name": ParameterSpec(STRING, "Ten lien he tuy chon.")},
     ),
     ToolSpec(
+        "call_family_contact",
+        "Goi nguoi nha theo ten hoac vai tro, mo cuoc goi tren may nguoi dung va cho ket qua bat may hoac het gio.",
+        {
+            "contact_name": ParameterSpec(STRING, "Ten hoac quan he cua nguoi nha can goi."),
+            "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
+        },
+        ["contact_name"],
+    ),
+    ToolSpec(
+        "call_support_contact",
+        "Goi nguoi ho tro. Neu co ten nguoi nha thi uu tien goi nguoi nha do; neu chung chung thi tim volunteer ho tro.",
+        {
+            "contact_name": ParameterSpec(STRING, "Ten nguoi nha tuy chon. Bo trong neu chi muon tim nguoi ho tro chung chung."),
+            "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
+        },
+    ),
+    ToolSpec(
+        "list_family_contacts",
+        "Kiem tra realtime xem nguoi dung da lien ket gia dinh chua va liet ke cac lien he hien co.",
+    ),
+    ToolSpec(
         "activate_camera",
-        "Bat/mo camera dien thoai khi nguoi dung noi bat camera, mo camera, xem giup, "
-        "nhin xung quanh, mo mat, hoac can AI mo ta moi truong.",
-        {"reason": ParameterSpec(STRING, "Ly do can bat camera.")},
+        "Bat/mo camera chi sau khi user noi ro yeu cau xem qua camera "
+        "hoac da dong y ro rang sau cau hoi xac nhan.",
+        {
+            "reason": ParameterSpec(STRING, "Ly do can bat camera."),
+            "consent_phrase": ParameterSpec(
+                STRING,
+                "Cum tu user vua noi de cho phep mo camera, giu gan nguyen van nhat co the.",
+            ),
+            "consent_source": ParameterSpec(
+                STRING,
+                "explicit_request neu user tu noi mo/xem camera; explicit_confirmation neu user vua dong y sau khi duoc hoi.",
+            ),
+        },
+        ["reason", "consent_phrase", "consent_source"],
     ),
     ToolSpec(
         "deactivate_camera",
@@ -157,6 +189,16 @@ TOOL_SPECS = (
     ToolSpec("get_location", "Lay vi tri hien tai tu dien thoai."),
     ToolSpec("get_current_location", "Lay vi tri hien tai tu dien thoai."),
     ToolSpec("update_location", "Cap nhat vi tri hien tai len he thong."),
+    ToolSpec(
+        "answer_incoming_call",
+        "Bat may ho nguoi dung khi co cuoc goi den dang do chuong. "
+        "Chi goi khi nguoi dung dong y nghe may.",
+    ),
+    ToolSpec(
+        "decline_incoming_call",
+        "Tu choi cuoc goi den dang do chuong. "
+        "Chi goi khi nguoi dung yeu cau khong nghe / tu choi.",
+    ),
 )
 
 

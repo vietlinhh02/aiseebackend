@@ -13,6 +13,8 @@ type fakeStore struct {
 	start      time.Time
 	end        time.Time
 	userID     string
+
+	denyFamilyLink bool
 }
 
 func (f *fakeStore) LoadWindow(
@@ -27,12 +29,100 @@ func (f *fakeStore) LoadWindow(
 	return f.windowData, nil
 }
 
+func (f *fakeStore) InsertCareEvent(context.Context, InsertCareEventInput) error { return nil }
+
+func (f *fakeStore) ListCareEventsForCitation(context.Context, string, int) ([]CareEventRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) CreateIncidentSOS(context.Context, string, string, float64, float64, int) (string, error) {
+	return "", nil
+}
+
+func (f *fakeStore) AppendIncidentEvent(context.Context, string, string, *string, map[string]any) error {
+	return nil
+}
+
+func (f *fakeStore) LatestIncidentInRange(context.Context, string, time.Time, time.Time) (*IncidentRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListIncidentEvents(context.Context, string) ([]IncidentEventRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetLatestOpenIncidentID(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (f *fakeStore) HasFamilyLinkBetween(context.Context, string, string) (bool, error) {
+	if f.denyFamilyLink {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (f *fakeStore) ListCareAlerts(context.Context, string, string, int) ([]CareAlertRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) InsertCareAlert(context.Context, string, string, string, string, *string, map[string]any) (string, error) {
+	return "", nil
+}
+
+func (f *fakeStore) UpdateCareAlertAck(context.Context, string, string) error { return nil }
+
+func (f *fakeStore) UpdateCareAlertResolve(context.Context, string, string) error { return nil }
+
+func (f *fakeStore) UpdateCareAlertDismiss(context.Context, string, string) error { return nil }
+
+func (f *fakeStore) GetCareAlertForUser(context.Context, string, string) (*CareAlertRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetCareAlertByID(context.Context, string) (*CareAlertRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListCareTasks(context.Context, string, int) ([]CareTaskRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) InsertCareTask(context.Context, string, string, string, *time.Time, map[string]any) (string, error) {
+	return "", nil
+}
+
+func (f *fakeStore) UpdateCareTask(context.Context, string, string, string, *time.Time, string, map[string]any) error {
+	return nil
+}
+
+func (f *fakeStore) CompleteCareTask(context.Context, string, string) error { return nil }
+
+func (f *fakeStore) GetCareTask(context.Context, string, string) (*CareTaskRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetCareTaskByID(context.Context, string) (*CareTaskRow, error) { return nil, nil }
+
+func (f *fakeStore) GetMemberPermissions(context.Context, string, string) (map[string]any, error) {
+	return defaultPermissionScopes(), nil
+}
+
+func (f *fakeStore) UpsertMemberPermissions(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (f *fakeStore) InsertAuditLog(context.Context, string, string, map[string]any, string) error {
+	return nil
+}
+
 type fakeBilling struct {
-	entitlementsResp billing.EntitlementsResponse
-	entitlementsUser string
-	recordInput      billing.UsageRecordInput
-	recordResp       billing.UsageRecord
-	recordErr        error
+	entitlementsResp  billing.EntitlementsResponse
+	entitlementsUser  string
+	entitlementsInput billing.BillingOverviewInput
+	recordInput       billing.UsageRecordInput
+	recordResp        billing.UsageRecord
+	recordErr         error
 }
 
 func (f *fakeBilling) CurrentEntitlements(
@@ -40,6 +130,15 @@ func (f *fakeBilling) CurrentEntitlements(
 	userID string,
 ) (billing.EntitlementsResponse, error) {
 	f.entitlementsUser = userID
+	return f.entitlementsResp, nil
+}
+
+func (f *fakeBilling) CurrentEntitlementsForBilling(
+	_ context.Context,
+	input billing.BillingOverviewInput,
+) (billing.EntitlementsResponse, error) {
+	f.entitlementsInput = input
+	f.entitlementsUser = input.UserID
 	return f.entitlementsResp, nil
 }
 
@@ -126,6 +225,9 @@ func TestServiceTimelineAggregatesEventsAndClampsWindow(t *testing.T) {
 	}
 	if billingSvc.entitlementsUser != "family-1" {
 		t.Fatalf("entitlements user = %q", billingSvc.entitlementsUser)
+	}
+	if billingSvc.entitlementsInput.CaredUserID != "user-1" {
+		t.Fatalf("entitlements input = %+v", billingSvc.entitlementsInput)
 	}
 	if resp.EffectiveDays != 7 {
 		t.Fatalf("effective days = %d", resp.EffectiveDays)
@@ -338,7 +440,9 @@ func TestServiceExportPDFRecordsUsageAndReturnsPlaceholderData(t *testing.T) {
 	billingSvc := &fakeBilling{
 		entitlementsResp: billing.EntitlementsResponse{
 			Entitlements: map[string]billing.EntitlementValue{
-				"weekly_report_enabled": {LimitValue: true},
+				"weekly_report_enabled":     {LimitValue: true},
+				"weekly_report_pdf_enabled": {LimitValue: true},
+				"export_format":             {LimitValue: "pdf_csv"},
 			},
 		},
 	}
@@ -357,8 +461,11 @@ func TestServiceExportPDFRecordsUsageAndReturnsPlaceholderData(t *testing.T) {
 	if billingSvc.recordInput.UsageType != billing.UsagePDFExports {
 		t.Fatalf("usage type = %q", billingSvc.recordInput.UsageType)
 	}
-	if billingSvc.recordInput.UserID != "family-1" {
+	if billingSvc.recordInput.UserID != "user-1" {
 		t.Fatalf("usage user = %q", billingSvc.recordInput.UserID)
+	}
+	if billingSvc.recordInput.CaredUserID != "user-1" {
+		t.Fatalf("usage billed context = %+v", billingSvc.recordInput)
 	}
 	if billingSvc.recordInput.Source != "care_dashboard_pdf_export" {
 		t.Fatalf("usage source = %q", billingSvc.recordInput.Source)
@@ -371,5 +478,40 @@ func TestServiceExportPDFRecordsUsageAndReturnsPlaceholderData(t *testing.T) {
 	}
 	if resp.ReportType != "weekly_report" {
 		t.Fatalf("report type = %q", resp.ReportType)
+	}
+}
+
+func TestPutPermissionsDeniedWhenTargetNotLinked(t *testing.T) {
+	store := &fakeStore{denyFamilyLink: true}
+	bill := &fakeBilling{
+		entitlementsResp: billing.EntitlementsResponse{
+			Entitlements: map[string]billing.EntitlementValue{
+				"permission_matrix_level": {LimitValue: "advanced"},
+			},
+		},
+	}
+	svc := NewService(store, bill)
+	err := svc.PutPermissions(
+		context.Background(),
+		"00000000-0000-0000-0000-000000000001",
+		"00000000-0000-0000-0000-000000000002",
+		"00000000-0000-0000-0000-000000000003",
+		map[string]any{"timeline": "read"},
+	)
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.Status != 403 || apiErr.Code != "family_member_not_linked" {
+		t.Fatalf("want family_member_not_linked 403, got %v", err)
+	}
+}
+
+func TestFilterCareEventsForCoachQueryMatchesTokens(t *testing.T) {
+	sum := "đau đầu nặng"
+	rows := []CareEventRow{
+		{ID: "1", EventType: "health.symptom.logged", Title: "Khác", Summary: &sum, OccurredAt: time.Now()},
+		{ID: "2", EventType: "medication.taken", Title: "Thuốc", OccurredAt: time.Now()},
+	}
+	out := filterCareEventsForCoachQuery(rows, "đau đầu", 5)
+	if len(out) != 1 || out[0].ID != "1" {
+		t.Fatalf("want one matched row, got %+v", out)
 	}
 }

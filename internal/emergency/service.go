@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/push"
@@ -27,11 +28,14 @@ type AlertResult struct {
 }
 
 type EscalateResult struct {
-	Status      string   `json:"status"`
-	RoomName    string   `json:"room_name"`
-	Token       string   `json:"token"`
-	ContactName string   `json:"contact_name"`
-	Remaining   []string `json:"remaining"`
+	Status       string   `json:"status"`
+	RoomName     string   `json:"room_name"`
+	Token        string   `json:"token"`
+	ContactID    string   `json:"contact_id"`
+	ContactName  string   `json:"contact_name"`
+	Relationship string   `json:"relationship"`
+	AvatarURL    string   `json:"avatar_url"`
+	Remaining    []string `json:"remaining"`
 }
 
 type Service struct {
@@ -39,17 +43,23 @@ type Service struct {
 	pusher    *push.Pusher
 	lk        *lk.Client
 	lastAlert sync.Map
+	hook      SOSDomainHook
 }
 
 func NewService(
 	queries *dbgen.Queries,
 	pusher *push.Pusher,
 	lkClient *lk.Client,
+	hook SOSDomainHook,
 ) *Service {
+	if hook == nil {
+		hook = noopSOSHook{}
+	}
 	return &Service{
 		queries: queries,
 		pusher:  pusher,
 		lk:      lkClient,
+		hook:    hook,
 	}
 }
 
@@ -112,13 +122,14 @@ func (s *Service) Alert(
 		calleeToken, _ := s.lk.CreateToken(
 			roomName, pgutil.PgUUIDToString(m.ID), m.DisplayName,
 		)
+		lang := i18n.FromUserSettings(m.Settings)
 		s.pusher.Send(ctx, push.UserTokens{
 			FcmToken:      m.FcmToken,
 			ApnsToken:     m.ApnsToken,
 			ApnsVoipToken: m.ApnsVoipToken,
 		}, push.Notification{
-			Title: "SOS - " + user.DisplayName,
-			Body:  "Cần giúp đỡ khẩn cấp!",
+			Title: i18n.T(lang, "notif.emergency.title", user.DisplayName),
+			Body:  i18n.T(lang, "notif.emergency.body"),
 			Type:  "voip",
 			Data: map[string]string{
 				"type":        "emergency",
@@ -134,6 +145,10 @@ func (s *Service) Alert(
 	}
 
 	s.lastAlert.Store(userID, time.Now())
+
+	if err := s.hook.OnSOSAlert(ctx, userID, roomName, lat, lng, notified); err != nil {
+		slog.Error("sos domain hook", "user_id", userID, "error", err)
+	}
 
 	// Update last known location
 	if err := s.queries.UpdateUserLocation(
@@ -218,13 +233,14 @@ func (s *Service) Escalate(
 		roomName, pgutil.PgUUIDToString(target.ID), target.DisplayName,
 	)
 
+	lang := i18n.FromUserSettings(target.Settings)
 	s.pusher.Send(ctx, push.UserTokens{
 		FcmToken:      target.FcmToken,
 		ApnsToken:     target.ApnsToken,
 		ApnsVoipToken: target.ApnsVoipToken,
 	}, push.Notification{
-		Title: "SOS - " + caller.DisplayName,
-		Body:  "Cần giúp đỡ khẩn cấp!",
+		Title: i18n.T(lang, "notif.emergency.title", caller.DisplayName),
+		Body:  i18n.T(lang, "notif.emergency.body"),
 		Type:  "voip",
 		Data: map[string]string{
 			"type":        "escalation",
@@ -235,75 +251,26 @@ func (s *Service) Escalate(
 		},
 	})
 
-	answered, err := s.waitForAnswer(
-		ctx, roomName, userID,
-	)
-	if err != nil {
-		return EscalateResult{
-			Status:      "no_answer",
-			ContactName: target.DisplayName,
-			Remaining:   remaining,
-		}, err
+	if err := s.hook.OnSOSFamilyEscalation(
+		ctx, userID, roomName, target.DisplayName, "notified", remaining,
+	); err != nil {
+		slog.Error("sos escalation domain hook", "user_id", userID, "error", err)
 	}
 
-	if answered {
-		return EscalateResult{
-			Status:      "answered",
-			RoomName:    roomName,
-			Token:       token,
-			ContactName: target.DisplayName,
-		}, nil
+	avatar := ""
+	if target.AvatarUrl.Valid {
+		avatar = target.AvatarUrl.String
 	}
-
 	return EscalateResult{
-		Status:      "no_answer",
-		ContactName: target.DisplayName,
-		Remaining:   remaining,
+		Status:       "prepared",
+		RoomName:     roomName,
+		Token:        token,
+		ContactID:    pgutil.PgUUIDToString(target.ID),
+		ContactName:  target.DisplayName,
+		Relationship: target.Relationship,
+		AvatarURL:    avatar,
+		Remaining:    remaining,
 	}, nil
-}
-
-func (s *Service) waitForAnswer(
-	ctx context.Context,
-	roomName, callerID string,
-) (bool, error) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	deadline := time.After(30 * time.Second)
-
-	for {
-		select {
-		case <-ctx.Done():
-			if err := s.lk.DeleteRoom(
-				context.Background(), roomName,
-			); err != nil {
-				slog.Error("delete room", "room", roomName, "error", err)
-			}
-			return false, ctx.Err()
-		case <-deadline:
-			if err := s.lk.DeleteRoom(
-				context.Background(), roomName,
-			); err != nil {
-				slog.Error("delete room", "room", roomName, "error", err)
-			}
-			return false, nil
-		case <-ticker.C:
-			participants, err := s.lk.ListParticipants(
-				ctx, roomName,
-			)
-			if err != nil {
-				slog.Warn("list participants failed",
-					"room", roomName, "error", err,
-				)
-				continue
-			}
-			for _, p := range participants {
-				if p.Identity != callerID &&
-					p.Identity != "" {
-					return true, nil
-				}
-			}
-		}
-	}
 }
 
 // FilterContacts filters family members by contact name

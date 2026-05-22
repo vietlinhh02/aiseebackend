@@ -7,6 +7,9 @@ def test_gemini_tool_declarations_keep_current_tool_parity():
         "make_video_call",
         "send_chat_message",
         "read_unread_messages",
+        "call_family_contact",
+        "call_support_contact",
+        "list_family_contacts",
         "activate_camera",
         "deactivate_camera",
         "set_medication_reminder",
@@ -25,6 +28,8 @@ def test_gemini_tool_declarations_keep_current_tool_parity():
         "get_current_location",
         "update_location",
         "web_search",
+        "answer_incoming_call",
+        "decline_incoming_call",
     }
 
     assert set(tool_names()) == expected
@@ -34,3 +39,5 @@ def test_gemini_tool_declarations_keep_current_tool_parity():
     assert {declaration.name for declaration in declarations} == expected
     set_medication = next(d for d in declarations if d.name == "set_medication_reminder")
     assert set_medication.parameters.required == ["medicine_name", "dosage", "times"]
+    activate_camera = next(d for d in declarations if d.name == "activate_camera")
+    assert activate_camera.parameters.required == ["reason", "consent_phrase", "consent_source"]

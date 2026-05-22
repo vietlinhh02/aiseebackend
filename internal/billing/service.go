@@ -7,14 +7,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 )
 
 type Store interface {
 	ListPlans(context.Context) ([]Plan, error)
 	DefaultPlan(context.Context) (Plan, error)
+	ActiveCareGroup(context.Context, string) (CareGroupSummary, error)
 	DefaultCareGroup(context.Context, string) (CareGroupSummary, error)
+	CareGroupForBilling(
+		context.Context, BillingOverviewInput,
+	) (CareGroupSummary, error)
+	SubscriptionByProviderRef(
+		context.Context, string, string,
+	) (*Subscription, error)
 	CurrentSubscription(context.Context, string) (*Subscription, error)
 	CurrentSubscriptionForCareGroup(context.Context, string) (*Subscription, error)
+	ActiveSubscriptionsForCareGroup(context.Context, string) ([]Subscription, error)
 	CaredUserIDsForCareGroup(context.Context, string) ([]string, error)
 	SubscriptionEventsForCareGroup(
 		context.Context, string, int,
@@ -46,6 +56,10 @@ type Service struct {
 	store Store
 }
 
+const defaultFallbackPlanCode = "plus_399k"
+const defaultFallbackPlanName = "Trial 1 tháng"
+const defaultTrialDurationMonths = 1
+
 func NewService(store Store) *Service {
 	return &Service{store: store}
 }
@@ -71,13 +85,29 @@ func (s *Service) CurrentSubscription(
 	ctx context.Context,
 	userID string,
 ) (SubscriptionResponse, error) {
-	sub, plan, err := s.effectivePlan(ctx, userID)
+	return s.CurrentSubscriptionForBilling(ctx, BillingOverviewInput{
+		UserID: userID,
+	})
+}
+
+func (s *Service) CurrentSubscriptionForBilling(
+	ctx context.Context,
+	input BillingOverviewInput,
+) (SubscriptionResponse, error) {
+	if strings.TrimSpace(input.UserID) == "" {
+		return SubscriptionResponse{}, fmt.Errorf("user_id is required")
+	}
+	careGroup, err := s.store.CareGroupForBilling(ctx, input)
+	if err != nil {
+		return SubscriptionResponse{}, err
+	}
+	sub, plan, err := s.effectiveCareGroupPlan(ctx, careGroup)
 	if err != nil {
 		return SubscriptionResponse{}, err
 	}
 	return SubscriptionResponse{
 		Subscription:  sub,
-		EffectivePlan: summarizePlan(plan),
+		EffectivePlan: summarizeEffectivePlan(sub, plan),
 		AsOf:          time.Now().UTC(),
 	}, nil
 }
@@ -86,16 +116,30 @@ func (s *Service) CurrentEntitlements(
 	ctx context.Context,
 	userID string,
 ) (EntitlementsResponse, error) {
-	_, plan, err := s.effectivePlan(ctx, userID)
+	return s.CurrentEntitlementsForBilling(ctx, BillingOverviewInput{
+		UserID: userID,
+	})
+}
+
+func (s *Service) CurrentEntitlementsForBilling(
+	ctx context.Context,
+	input BillingOverviewInput,
+) (EntitlementsResponse, error) {
+	if strings.TrimSpace(input.UserID) == "" {
+		return EntitlementsResponse{}, fmt.Errorf("user_id is required")
+	}
+	careGroup, err := s.store.CareGroupForBilling(ctx, input)
 	if err != nil {
 		return EntitlementsResponse{}, err
 	}
-	entitlements, err := s.store.EntitlementsForPlan(ctx, plan.ID)
+	sub, plan, entitlements, err := s.effectiveCareGroupEntitlements(
+		ctx, careGroup,
+	)
 	if err != nil {
 		return EntitlementsResponse{}, err
 	}
 	resp := EntitlementsResponse{
-		Plan:         summarizePlan(plan),
+		Plan:         summarizeEffectivePlan(sub, plan),
 		Entitlements: make(map[string]EntitlementValue, len(entitlements)),
 		AsOf:         time.Now().UTC(),
 	}
@@ -112,17 +156,18 @@ func (s *Service) CurrentEntitlements(
 
 func (s *Service) CurrentBillingOverview(
 	ctx context.Context,
-	userID string,
+	input BillingOverviewInput,
 ) (BillingOverviewResponse, error) {
-	careGroup, err := s.store.DefaultCareGroup(ctx, userID)
+	if strings.TrimSpace(input.UserID) == "" {
+		return BillingOverviewResponse{}, fmt.Errorf("user_id is required")
+	}
+	careGroup, err := s.store.CareGroupForBilling(ctx, input)
 	if err != nil {
 		return BillingOverviewResponse{}, err
 	}
-	sub, plan, err := s.effectiveCareGroupPlan(ctx, careGroup.ID)
-	if err != nil {
-		return BillingOverviewResponse{}, err
-	}
-	entitlements, err := s.store.EntitlementsForPlan(ctx, plan.ID)
+	sub, plan, entitlements, err := s.effectiveCareGroupEntitlements(
+		ctx, careGroup,
+	)
 	if err != nil {
 		return BillingOverviewResponse{}, err
 	}
@@ -132,9 +177,9 @@ func (s *Service) CurrentBillingOverview(
 		return BillingOverviewResponse{}, err
 	}
 	if len(caredUserIDs) == 0 {
-		caredUserIDs = []string{userID}
+		caredUserIDs = []string{input.UserID}
 	}
-	usage, err := s.usageForUsers(ctx, plan, entitlements, caredUserIDs)
+	usage, err := s.usageForUsers(ctx, sub, plan, entitlements, caredUserIDs)
 	if err != nil {
 		return BillingOverviewResponse{}, err
 	}
@@ -146,11 +191,11 @@ func (s *Service) CurrentBillingOverview(
 	return BillingOverviewResponse{
 		CareGroup:       careGroup,
 		Subscription:    sub,
-		EffectivePlan:   summarizePlan(plan),
+		EffectivePlan:   summarizeEffectivePlan(sub, plan),
 		Entitlements:    entitlementMap,
 		Usage:           usage,
 		Events:          events,
-		StoreManagement: storeManagementInfo(sub),
+		StoreManagement: storeManagementInfoLang(sub, i18n.FromContext(ctx)),
 		AsOf:            now,
 	}, nil
 }
@@ -174,9 +219,11 @@ func (s *Service) RecordBillableUsage(
 		return UsageRecord{}, err
 	}
 	if err := s.RequireQuota(ctx, QuotaCheckInput{
-		UserID:    input.UserID,
-		UsageType: input.UsageType,
-		Quantity:  input.Quantity,
+		UserID:      input.UserID,
+		CareGroupID: input.CareGroupID,
+		CaredUserID: input.CaredUserID,
+		UsageType:   input.UsageType,
+		Quantity:    input.Quantity,
 	}); err != nil {
 		return UsageRecord{}, err
 	}
@@ -245,7 +292,11 @@ func (s *Service) CheckQuota(
 	}
 	input.Quantity = roundQuantity(input.Quantity)
 
-	usage, err := s.currentCareGroupUsage(ctx, input.UserID)
+	usage, err := s.currentCareGroupUsage(ctx, BillingOverviewInput{
+		UserID:      input.UserID,
+		CareGroupID: input.CareGroupID,
+		CaredUserID: input.CaredUserID,
+	})
 	if err != nil {
 		return QuotaDecision{}, err
 	}
@@ -257,6 +308,11 @@ func (s *Service) CheckQuota(
 		PlanCode:  usage.Plan.Code,
 	}
 	if !ok {
+		if usageTypeRequiresConfiguredPlanQuota(input.UsageType) {
+			decision.Allowed = false
+			decision.Remaining = 0
+			return decision, nil
+		}
 		return decision, nil
 	}
 	decision.Remaining = quota.Remaining
@@ -291,9 +347,11 @@ func (s *Service) StartUsageSession(
 	input.ReservedQuantity = roundQuantity(input.ReservedQuantity)
 	if input.ReservedQuantity > 0 {
 		if err := s.RequireQuota(ctx, QuotaCheckInput{
-			UserID:    input.UserID,
-			UsageType: input.UsageType,
-			Quantity:  input.ReservedQuantity,
+			UserID:      input.UserID,
+			CareGroupID: input.CareGroupID,
+			CaredUserID: input.CaredUserID,
+			UsageType:   input.UsageType,
+			Quantity:    input.ReservedQuantity,
 		}); err != nil {
 			return UsageSession{}, err
 		}
@@ -338,9 +396,11 @@ func (s *Service) enforceUsageSessionCommitQuota(
 	input CommitUsageSessionInput,
 ) (CommitUsageSessionInput, error) {
 	decision, err := s.CheckQuota(ctx, QuotaCheckInput{
-		UserID:    input.UserID,
-		UsageType: input.UsageType,
-		Quantity:  input.Quantity,
+		UserID:      input.UserID,
+		CareGroupID: input.CareGroupID,
+		CaredUserID: input.CaredUserID,
+		UsageType:   input.UsageType,
+		Quantity:    input.Quantity,
 	})
 	if err != nil {
 		return CommitUsageSessionInput{}, err
@@ -404,32 +464,25 @@ func (s *Service) GrantUsageQuota(
 
 func (s *Service) CurrentUsage(
 	ctx context.Context,
-	userID string,
+	input BillingOverviewInput,
 ) (UsageResponse, error) {
-	_, plan, err := s.effectivePlan(ctx, userID)
-	if err != nil {
-		return UsageResponse{}, err
+	if strings.TrimSpace(input.UserID) == "" {
+		return UsageResponse{}, fmt.Errorf("user_id is required")
 	}
-	entitlements, err := s.store.EntitlementsForPlan(ctx, plan.ID)
-	if err != nil {
-		return UsageResponse{}, err
-	}
-	return s.usageForUser(ctx, userID, plan, entitlements)
+	return s.currentCareGroupUsage(ctx, input)
 }
 
 func (s *Service) currentCareGroupUsage(
 	ctx context.Context,
-	userID string,
+	input BillingOverviewInput,
 ) (UsageResponse, error) {
-	careGroup, err := s.store.DefaultCareGroup(ctx, userID)
+	careGroup, err := s.store.CareGroupForBilling(ctx, input)
 	if err != nil {
 		return UsageResponse{}, err
 	}
-	_, plan, err := s.effectiveCareGroupPlan(ctx, careGroup.ID)
-	if err != nil {
-		return UsageResponse{}, err
-	}
-	entitlements, err := s.store.EntitlementsForPlan(ctx, plan.ID)
+	sub, plan, entitlements, err := s.effectiveCareGroupEntitlements(
+		ctx, careGroup,
+	)
 	if err != nil {
 		return UsageResponse{}, err
 	}
@@ -438,13 +491,14 @@ func (s *Service) currentCareGroupUsage(
 		return UsageResponse{}, err
 	}
 	if len(caredUserIDs) == 0 {
-		caredUserIDs = []string{userID}
+		caredUserIDs = []string{input.UserID}
 	}
-	return s.usageForUsers(ctx, plan, entitlements, caredUserIDs)
+	return s.usageForUsers(ctx, sub, plan, entitlements, caredUserIDs)
 }
 
 func (s *Service) usageForUser(
 	ctx context.Context,
+	sub *Subscription,
 	userID string,
 	plan Plan,
 	entitlements []Entitlement,
@@ -461,7 +515,7 @@ func (s *Service) usageForUser(
 	}
 
 	resp := UsageResponse{
-		Plan:        summarizePlan(plan),
+		Plan:        summarizeEffectivePlan(sub, plan),
 		Quotas:      make(map[UsageType]UsageQuota),
 		TopUsage:    append([]UsageTotal(nil), usageTotals...),
 		PeriodStart: start,
@@ -520,6 +574,7 @@ func (s *Service) usageForUser(
 
 func (s *Service) usageForUsers(
 	ctx context.Context,
+	sub *Subscription,
 	plan Plan,
 	entitlements []Entitlement,
 	userIDs []string,
@@ -536,7 +591,7 @@ func (s *Service) usageForUsers(
 	}
 
 	resp := UsageResponse{
-		Plan:        summarizePlan(plan),
+		Plan:        summarizeEffectivePlan(sub, plan),
 		Quotas:      make(map[UsageType]UsageQuota),
 		TopUsage:    append([]UsageTotal(nil), usageTotals...),
 		PeriodStart: start,
@@ -647,11 +702,11 @@ func (s *Service) totalsForUsersPeriod(
 	return totals, nil
 }
 
-func (s *Service) effectivePlan(
+func (s *Service) effectiveCareGroupPlan(
 	ctx context.Context,
-	userID string,
+	careGroup CareGroupSummary,
 ) (*Subscription, Plan, error) {
-	sub, err := s.store.CurrentSubscription(ctx, userID)
+	sub, err := s.store.CurrentSubscriptionForCareGroup(ctx, careGroup.ID)
 	if err != nil {
 		return nil, Plan{}, err
 	}
@@ -661,6 +716,15 @@ func (s *Service) effectivePlan(
 			return nil, Plan{}, err
 		}
 		return sub, plan, nil
+	}
+	if trialSub, trialPlan, ok, err := s.activeFallbackTrial(
+		ctx,
+		careGroup,
+		time.Now().UTC(),
+	); err != nil {
+		return nil, Plan{}, err
+	} else if ok {
+		return trialSub, trialPlan, nil
 	}
 	plan, err := s.store.DefaultPlan(ctx)
 	if err != nil {
@@ -669,26 +733,109 @@ func (s *Service) effectivePlan(
 	return nil, plan, nil
 }
 
-func (s *Service) effectiveCareGroupPlan(
+func summarizeEffectivePlan(sub *Subscription, plan Plan) PlanSummary {
+	summary := summarizePlan(plan)
+	if isSyntheticTrialSubscription(sub) && plan.Code == defaultFallbackPlanCode {
+		summary.Name = defaultFallbackPlanName
+	}
+	return summary
+}
+
+func (s *Service) activeFallbackTrial(
 	ctx context.Context,
-	careGroupID string,
-) (*Subscription, Plan, error) {
-	sub, err := s.store.CurrentSubscriptionForCareGroup(ctx, careGroupID)
-	if err != nil {
-		return nil, Plan{}, err
+	careGroup CareGroupSummary,
+	now time.Time,
+) (*Subscription, Plan, bool, error) {
+	if careGroup.CreatedAt.IsZero() {
+		return nil, Plan{}, false, nil
 	}
-	if sub != nil {
-		plan, err := s.store.PlanByID(ctx, sub.PlanID)
+	plan, err := s.store.PlanByCode(ctx, defaultFallbackPlanCode)
+	if err != nil {
+		return nil, Plan{}, false, fmt.Errorf("billing trial plan lookup: %w", err)
+	}
+	start := careGroup.CreatedAt.UTC()
+	end := start.AddDate(0, defaultTrialDurationMonths, 0)
+	if !now.Before(end) {
+		return nil, Plan{}, false, nil
+	}
+	return &Subscription{
+		ID:                 "",
+		CareGroupID:        careGroup.ID,
+		PlanID:             plan.ID,
+		PlanCode:           plan.Code,
+		PlanName:           defaultFallbackPlanName,
+		Status:             "trialing",
+		CurrentPeriodStart: &start,
+		CurrentPeriodEnd:   &end,
+		Metadata: map[string]any{
+			"synthetic_trial": true,
+		},
+	}, plan, true, nil
+}
+
+func isSyntheticTrialSubscription(sub *Subscription) bool {
+	if sub == nil || sub.Status != "trialing" || sub.Metadata == nil {
+		return false
+	}
+	flag, _ := sub.Metadata["synthetic_trial"].(bool)
+	return flag
+}
+
+func (s *Service) effectiveCareGroupEntitlements(
+	ctx context.Context,
+	careGroup CareGroupSummary,
+) (*Subscription, Plan, []Entitlement, error) {
+	sub, plan, err := s.effectiveCareGroupPlan(ctx, careGroup)
+	if err != nil {
+		return nil, Plan{}, nil, err
+	}
+	subs, err := s.store.ActiveSubscriptionsForCareGroup(ctx, careGroup.ID)
+	if err != nil {
+		return nil, Plan{}, nil, err
+	}
+	if len(subs) == 0 {
+		entitlements, err := s.store.EntitlementsForPlan(ctx, plan.ID)
 		if err != nil {
-			return nil, Plan{}, err
+			return nil, Plan{}, nil, err
 		}
-		return sub, plan, nil
+		return sub, plan, entitlements, nil
 	}
-	plan, err := s.store.DefaultPlan(ctx)
+	entitlements, err := s.aggregateEntitlementsForSubscriptions(ctx, subs)
 	if err != nil {
-		return nil, Plan{}, err
+		return nil, Plan{}, nil, err
 	}
-	return nil, plan, nil
+	return sub, plan, entitlements, nil
+}
+
+func (s *Service) aggregateEntitlementsForSubscriptions(
+	ctx context.Context,
+	subs []Subscription,
+) ([]Entitlement, error) {
+	merged := make(map[string]Entitlement)
+	for _, sub := range subs {
+		entitlements, err := s.store.EntitlementsForPlan(ctx, sub.PlanID)
+		if err != nil {
+			return nil, err
+		}
+		for _, entitlement := range entitlements {
+			current, ok := merged[entitlement.FeatureKey]
+			if !ok {
+				merged[entitlement.FeatureKey] = cloneEntitlement(entitlement)
+				continue
+			}
+			merged[entitlement.FeatureKey] = mergeEntitlementValues(
+				current, entitlement,
+			)
+		}
+	}
+	result := make([]Entitlement, 0, len(merged))
+	for _, entitlement := range merged {
+		result = append(result, entitlement)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].FeatureKey < result[j].FeatureKey
+	})
+	return result, nil
 }
 
 func entitlementMap(entitlements []Entitlement) map[string]EntitlementValue {
@@ -704,10 +851,100 @@ func entitlementMap(entitlements []Entitlement) map[string]EntitlementValue {
 	return values
 }
 
+func cloneEntitlement(entitlement Entitlement) Entitlement {
+	cloned := entitlement
+	if entitlement.Metadata != nil {
+		cloned.Metadata = make(map[string]any, len(entitlement.Metadata))
+		for key, value := range entitlement.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	return cloned
+}
+
+func mergeEntitlementValues(current, incoming Entitlement) Entitlement {
+	merged := cloneEntitlement(current)
+	if merged.LimitUnit == "" {
+		merged.LimitUnit = incoming.LimitUnit
+	}
+	if merged.ResetPeriod == "" {
+		merged.ResetPeriod = incoming.ResetPeriod
+	}
+	if merged.Metadata == nil && incoming.Metadata != nil {
+		merged.Metadata = cloneEntitlement(incoming).Metadata
+	}
+
+	switch incomingValue := incoming.LimitValue.(type) {
+	case bool:
+		currentValue, _ := merged.LimitValue.(bool)
+		merged.LimitValue = currentValue || incomingValue
+	case int, int64, float64:
+		currentLimit, currentUnlimited := entitlementNumericLimit(merged.LimitValue)
+		incomingLimit, incomingUnlimited := entitlementNumericLimit(incoming.LimitValue)
+		switch {
+		case currentUnlimited:
+			return merged
+		case incomingUnlimited:
+			merged.LimitValue = incoming.LimitValue
+		default:
+			merged.LimitValue = roundQuantity(currentLimit + incomingLimit)
+		}
+	case string:
+		if incomingValue == "fair_use" || incomingValue == "unlimited" {
+			merged.LimitValue = incoming.LimitValue
+			return merged
+		}
+		currentString, _ := merged.LimitValue.(string)
+		if compareEntitlementLevel(
+			incoming.FeatureKey, incomingValue, currentString,
+		) > 0 {
+			merged.LimitValue = incoming.LimitValue
+		}
+	default:
+		if merged.LimitValue == nil {
+			merged.LimitValue = incoming.LimitValue
+		}
+	}
+	return merged
+}
+
+func compareEntitlementLevel(
+	featureKey string,
+	candidate string,
+	current string,
+) int {
+	if current == "" {
+		return 1
+	}
+	ordering := entitlementLevelOrder[featureKey]
+	if len(ordering) == 0 {
+		if candidate == current {
+			return 0
+		}
+		return -1
+	}
+	candidateRank, candidateOK := ordering[candidate]
+	currentRank, currentOK := ordering[current]
+	switch {
+	case candidateOK && currentOK:
+		return candidateRank - currentRank
+	case candidateOK:
+		return 1
+	case currentOK:
+		return -1
+	default:
+		return -1
+	}
+}
+
 func storeManagementInfo(sub *Subscription) StoreManagementInfo {
+	return storeManagementInfoLang(sub, i18n.DefaultLang)
+}
+
+func storeManagementInfoLang(sub *Subscription, lang string) StoreManagementInfo {
 	if sub == nil {
 		return StoreManagementInfo{
-			Instructions: "Chưa có gói trả phí. Hãy nâng gói từ ứng dụng của người thân.",
+			Instructions: i18n.T(lang, "billing.instructions.no_paid_plan"),
 		}
 	}
 	switch sub.Provider {
@@ -715,18 +952,18 @@ func storeManagementInfo(sub *Subscription) StoreManagementInfo {
 		return StoreManagementInfo{
 			Provider:     sub.Provider,
 			ManageURL:    "https://play.google.com/store/account/subscriptions",
-			Instructions: "Quản lý hoặc hủy gói trong Google Play.",
+			Instructions: i18n.T(lang, "billing.instructions.google_play"),
 		}
 	case "app_store", "revenuecat_app_store":
 		return StoreManagementInfo{
 			Provider:     sub.Provider,
 			ManageURL:    "https://apps.apple.com/account/subscriptions",
-			Instructions: "Quản lý hoặc hủy gói trong App Store.",
+			Instructions: i18n.T(lang, "billing.instructions.app_store"),
 		}
 	default:
 		return StoreManagementInfo{
 			Provider:     sub.Provider,
-			Instructions: "Gói này được quản lý bởi cửa hàng đã thanh toán.",
+			Instructions: i18n.T(lang, "billing.instructions.store_managed"),
 		}
 	}
 }
@@ -922,4 +1159,32 @@ var entitlementFeatureUsageTypes = map[string]UsageType{
 	"pdf_exports_per_month":            UsagePDFExports,
 	"care_coach_questions_per_month":   UsageCareCoachQuestions,
 	"pattern_detection_runs_per_month": UsagePatternDetectionRuns,
+}
+
+var entitlementLevelOrder = map[string]map[string]int{
+	"permission_matrix_level": {
+		"none":     0,
+		"basic":    1,
+		"advanced": 2,
+	},
+	"volunteer_priority_level": {
+		"none":     0,
+		"standard": 1,
+		"priority": 2,
+		"highest":  3,
+	},
+	"export_format": {
+		"none":    0,
+		"csv":     1,
+		"pdf_csv": 2,
+	},
+}
+
+func usageTypeRequiresConfiguredPlanQuota(ut UsageType) bool {
+	switch ut {
+	case UsageCareCoachQuestions, UsagePatternDetectionRuns, UsagePDFExports:
+		return true
+	default:
+		return false
+	}
 }

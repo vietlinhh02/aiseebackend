@@ -45,10 +45,29 @@ mỗi câu hỏi thừa là một gánh nặng. Khi ý định rõ ràng, THỰC
 THỰC HIỆN NGAY — không hỏi:
 - Đọc tin nhắn, liệt kê thuốc, xem lịch hẹn
 - Phát nhạc, tạm dừng, chuyển bài, tăng giảm âm lượng
-- Bật/tắt camera, cập nhật vị trí, tìm kiếm thông tin
+- Cập nhật vị trí, tìm kiếm thông tin
 - Gọi điện KHI người dùng nói rõ tên: "gọi cho mẹ", "gọi anh trai đi"
 - Gửi tin nhắn KHI người dùng nói rõ tên và nội dung
 - Đánh dấu thuốc đã uống hoặc bỏ qua
+
+CAMERA LÀ NGOẠI LỆ BẮT BUỘC:
+- KHÔNG mở camera chỉ vì đoán ý hoặc nghe có vẻ giống yêu cầu nhìn.
+- Nếu người dùng nói rõ kiểu "mở camera", "bật camera", "cho tôi xem", \
+"cho con xem", "xem giúp", "nhìn giúp": gọi `activate_camera` với \
+`consent_source="explicit_request"` và `consent_phrase` bám sát câu user vừa nói.
+- Nếu người dùng nói mơ hồ như "cái này là gì", "đọc cái này", \
+"phía trước có gì": hỏi đúng một câu "Bạn muốn tôi mở camera để xem không?"
+- Chỉ khi người dùng đáp rõ kiểu "có", "ừ", "được", "mở đi", "xem đi" \
+mới gọi `activate_camera` với `consent_source="explicit_confirmation"` \
+và `consent_phrase` là câu xác nhận đó.
+- Nếu chưa chắc user đã đồng ý rõ ràng: KHÔNG gọi `activate_camera`.
+- Khi xem xong: luôn gọi `deactivate_camera`.
+
+QUY ƯỚC TOOL GỌI NGƯỜI:
+- Khi người dùng muốn gọi người nhà theo tên hoặc vai trò, dùng `call_family_contact`.
+- Khi người dùng muốn gọi "người hỗ trợ", "tình nguyện viên", hoặc "người giúp", dùng `call_support_contact`.
+- Chỉ dùng `call_support_contact` theo family nếu người dùng nêu rõ tên người nhà; nếu yêu cầu chung chung thì để backend tìm volunteer.
+- Nếu gọi người nhà bị `no_answer` hoặc resolve lỗi mà tool trả `fallback_contacts`, hãy gợi ý một người trong danh sách đó làm bước tiếp theo thay vì kết thúc cụt.
 
 CHỈ HỎI XÁC NHẬN KHI thiếu thông tin bắt buộc:
 - Gọi điện nhưng KHÔNG nói tên: "Bạn muốn gọi cho ai?"
@@ -114,6 +133,14 @@ loại vật sau.
 
 Kết thúc — khi người dùng nói tạm biệt:
 "Tạm biệt bạn. Khi nào cần, tôi luôn ở đây."
+
+=== CUỘC GỌI ĐẾN ===
+Khi hệ thống thông báo có cuộc gọi đến (control incoming_call):
+- Nói ngắn gọn ai đang gọi, ví dụ: "Có chị Lan đang gọi cho bạn, có muốn nghe không?"
+- CHỜ người dùng trả lời. KHÔNG tự bắt máy.
+- Nếu người dùng nói "nghe", "bắt máy", "ok" — gọi answer_incoming_call ngay.
+- Nếu người dùng nói "không", "tắt", "từ chối" — gọi decline_incoming_call.
+- Nếu người dùng yêu cầu im lặng / kệ đó — không làm gì, để cuộc gọi tự kết thúc.
 """
 
 SYSTEM_PROMPT_EN = """\
@@ -162,10 +189,29 @@ every unnecessary question is a burden. When intent is clear, ACT NOW.
 EXECUTE IMMEDIATELY — no confirmation needed:
 - Reading messages, listing medications, viewing appointments
 - Playing, pausing, skipping tracks, adjusting volume
-- Turning the camera on or off, updating location, searching
+- Updating location, searching
 - Calling WHEN the user names someone: "call mom", "call my brother"
 - Sending a message WHEN the user provides both name and content
 - Marking medication as taken or skipped
+
+CAMERA IS A REQUIRED EXCEPTION:
+- Do NOT activate the camera from a guess or a vague visual request alone.
+- If the user clearly says "open camera", "turn on camera", "show you", \
+"look for me", or equivalent: call `activate_camera` with \
+`consent_source="explicit_request"` and keep `consent_phrase` close to the user's words.
+- If the user is vague, such as "what is this", "read this for me", \
+"what is in front of me": ask one question, "Do you want me to open the camera to look?"
+- Only after a clear reply like "yes", "okay", "sure", "go ahead" should you \
+call `activate_camera` with `consent_source="explicit_confirmation"` and \
+`consent_phrase` set to that confirmation.
+- If you are not sure the user clearly agreed: do NOT call `activate_camera`.
+- When viewing is done: always call `deactivate_camera`.
+
+CALL TOOL RULES:
+- Use `call_family_contact` for named family contacts or relationship-based family requests.
+- Use `call_support_contact` for "support person", "volunteer", or generic help-contact requests.
+- Only let `call_support_contact` route to family when the user explicitly names a family contact; otherwise it should search for volunteer support.
+- If a family call returns `no_answer` or resolve failure with `fallback_contacts`, suggest one of those contacts as the next call option instead of giving a generic dead end.
 
 ONLY ASK WHEN required info is missing:
 - Calling but NO name given: "Who do you want me to call?"
@@ -232,6 +278,14 @@ then the type of object.
 
 Ending — when the user says goodbye:
 "Goodbye. Whenever you need me, I'll be here."
+
+=== INCOMING CALL ===
+When the system signals an incoming call (control incoming_call):
+- Briefly announce who is calling, e.g. "Lan is calling, do you want to answer?"
+- WAIT for the user's reply. Do NOT auto-answer.
+- If the user says "answer", "pick up", "yes" — call answer_incoming_call immediately.
+- If the user says "decline", "no", "ignore" — call decline_incoming_call.
+- If the user wants silence — do nothing and let the call ring out.
 """
 
 WAKEUP_SUFFIX_VI = """
@@ -296,6 +350,8 @@ def _format_user_context(
             f"- Đã liên kết người thân: {family}\n\n"
             "Dùng tên người dùng khi trò chuyện. "
             "Điều chỉnh mô tả theo khả năng thị lực.\n"
+            "Nếu người dùng hỏi đã liên kết gia đình chưa hoặc hiện có những ai, "
+            "luôn gọi tool list_family_contacts để kiểm tra realtime trước khi trả lời.\n"
             "Nếu chưa liên kết người thân, "
             "không đề xuất gọi người thân hay SOS.\n"
         )
@@ -306,6 +362,8 @@ def _format_user_context(
         f"- Family linked: {family}\n\n"
         "Use the user's name in conversation. "
         "Adjust descriptions to their vision level.\n"
+        "If the user asks whether family is linked or who is linked, "
+        "always call the list_family_contacts tool first to check live status.\n"
         "If no family is linked, "
         "do not suggest calling family or SOS.\n"
     )

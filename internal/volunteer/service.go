@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/push"
@@ -63,6 +64,17 @@ type MatchStatus struct {
 	VolunteerName string `json:"volunteer_name,omitempty"`
 	RoomName      string `json:"room_name,omitempty"`
 	UserToken     string `json:"user_token,omitempty"`
+}
+
+type AssistantMatchResult struct {
+	Status        string `json:"status"`
+	MatchID       string `json:"match_id,omitempty"`
+	VolunteerID   string `json:"volunteer_id,omitempty"`
+	VolunteerName string `json:"volunteer_name,omitempty"`
+	RoomName      string `json:"room_name,omitempty"`
+	UserToken     string `json:"user_token,omitempty"`
+	CallType      string `json:"call_type,omitempty"`
+	Message       string `json:"message,omitempty"`
 }
 
 // Service handles volunteer registration, availability,
@@ -236,114 +248,62 @@ func (s *Service) StartMatch(
 	}, nil
 }
 
+func (s *Service) StartAssistantMatch(
+	ctx context.Context,
+	userID string,
+	callType string,
+) (AssistantMatchResult, error) {
+	matchID, err := s.createMatchUsage(ctx, userID)
+	if err != nil {
+		return AssistantMatchResult{}, err
+	}
+
+	user, candidates, err := s.loadMatchCandidates(ctx, userID)
+	if err != nil {
+		return AssistantMatchResult{}, err
+	}
+
+	result, err := s.matchCandidates(ctx, userID, user, candidates, matchID, normalizeCallType(callType))
+	if err != nil {
+		return AssistantMatchResult{}, err
+	}
+	return result, nil
+}
+
 func (s *Service) matchLoop(userID, matchID string) {
 	ctx := context.Background()
 	key := "match:" + matchID
 
-	uid, err := pgutil.ParsePgUUID(userID)
+	user, candidates, err := s.loadMatchCandidates(ctx, userID)
 	if err != nil {
-		slog.Error("matchLoop: parse user id",
-			"error", err,
-		)
+		slog.Error("matchLoop: load candidates", "error", err)
 		s.rdb.HSet(ctx, key, "status", "failed")
 		return
 	}
 
-	user, err := s.q.GetUserByID(ctx, uid)
+	result, err := s.matchCandidates(ctx, userID, user, candidates, matchID, "voice")
 	if err != nil {
-		slog.Error("matchLoop: get user",
-			"error", err,
-		)
+		slog.Error("matchLoop: match candidates", "error", err)
 		s.rdb.HSet(ctx, key, "status", "failed")
 		return
 	}
 
-	candidates, err := s.q.GetAvailableVolunteers(ctx, uid)
-	if err != nil {
-		slog.Error("matchLoop: get available volunteers",
-			"error", err,
-		)
-		s.rdb.HSet(ctx, key, "status", "failed")
-		return
+	fields := []any{
+		"status", result.Status,
 	}
-
-	if len(candidates) == 0 {
-		s.rdb.HSet(ctx, key, "status", "failed")
-		return
+	if result.VolunteerID != "" {
+		fields = append(fields, "volunteer_id", result.VolunteerID)
 	}
-
-	roomName := "vol-" + matchID[:8]
-	if err := s.lk.CreateRoomWithTimeout(
-		ctx, roomName, 300,
-	); err != nil {
-		slog.Error("matchLoop: create room",
-			"room", roomName, "error", err,
-		)
-		s.rdb.HSet(ctx, key, "status", "failed")
-		return
+	if result.VolunteerName != "" {
+		fields = append(fields, "volunteer_name", result.VolunteerName)
 	}
-
-	for _, c := range candidates {
-		volID := pgutil.PgUUIDToString(c.UserID)
-
-		calleeToken, _ := s.lk.CreateToken(
-			roomName, volID, c.DisplayName,
-		)
-
-		s.pusher.Send(ctx, push.UserTokens{
-			FcmToken:      c.FcmToken,
-			ApnsToken:     c.ApnsToken,
-			ApnsVoipToken: c.ApnsVoipToken,
-		}, push.Notification{
-			Title: "AiSee - " + user.DisplayName,
-			Body:  "Cần giúp đỡ từ người khiếm thị!",
-			Type:  "voip",
-			Data: map[string]string{
-				"type":        "volunteer_match",
-				"room_name":   roomName,
-				"user_id":     userID,
-				"caller_name": user.DisplayName,
-				"token":       calleeToken,
-				"match_id":    matchID,
-			},
-		})
-		if s.waitForJoin(ctx, roomName, userID, 30*time.Second) {
-			token, tokenErr := s.lk.CreateToken(
-				roomName, userID, user.DisplayName,
-			)
-			if tokenErr != nil {
-				slog.Error("matchLoop: create token",
-					"error", tokenErr,
-				)
-				continue
-			}
-
-			s.rdb.HSet(ctx, key,
-				"status", "matched",
-				"volunteer_id", volID,
-				"volunteer_name", c.DisplayName,
-				"room_name", roomName,
-				"user_token", token,
-			)
-
-			if incErr := s.q.IncrementVolunteerCalls(
-				ctx, c.UserID,
-			); incErr != nil {
-				slog.Error(
-					"matchLoop: increment calls",
-					"error", incErr,
-				)
-			}
-			return
-		}
+	if result.RoomName != "" {
+		fields = append(fields, "room_name", result.RoomName)
 	}
-
-	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
-		slog.Error("matchLoop: delete room",
-			"room", roomName, "error", err,
-		)
+	if result.UserToken != "" {
+		fields = append(fields, "user_token", result.UserToken)
 	}
-	s.rdb.HSet(ctx, key, "status", "failed")
+	s.rdb.HSet(ctx, key, fields...)
 }
 
 func (s *Service) waitForJoin(
@@ -443,4 +403,169 @@ func (s *Service) Rate(
 		)
 	}
 	return nil
+}
+
+func (s *Service) createMatchUsage(
+	ctx context.Context,
+	userID string,
+) (string, error) {
+	if s.billing != nil {
+		if err := s.billing.RequireQuota(ctx, billing.QuotaCheckInput{
+			UserID:    userID,
+			UsageType: billing.UsageVolunteerMatches,
+			Quantity:  1,
+		}); err != nil {
+			return "", err
+		}
+	}
+
+	matchID := uuid.New().String()
+	if s.billing != nil {
+		if _, err := s.billing.RecordUsage(ctx, billing.UsageRecordInput{
+			UserID:    userID,
+			UsageType: billing.UsageVolunteerMatches,
+			Quantity:  1,
+			Unit:      "matches",
+			Source:    "volunteer_match",
+			SourceID:  matchID,
+			Metadata: map[string]any{
+				"match_id": matchID,
+			},
+		}); err != nil {
+			return "", fmt.Errorf("record volunteer usage: %w", err)
+		}
+	}
+	return matchID, nil
+}
+
+func (s *Service) loadMatchCandidates(
+	ctx context.Context,
+	userID string,
+) (dbgen.User, []dbgen.GetAvailableVolunteersRow, error) {
+	uid, err := pgutil.ParsePgUUID(userID)
+	if err != nil {
+		return dbgen.User{}, nil, fmt.Errorf("parse user id: %w", err)
+	}
+
+	user, err := s.q.GetUserByID(ctx, uid)
+	if err != nil {
+		return dbgen.User{}, nil, fmt.Errorf("get user: %w", err)
+	}
+
+	candidates, err := s.q.GetAvailableVolunteers(ctx, uid)
+	if err != nil {
+		return dbgen.User{}, nil, fmt.Errorf("get available volunteers: %w", err)
+	}
+	return user, candidates, nil
+}
+
+func (s *Service) matchCandidates(
+	ctx context.Context,
+	userID string,
+	user dbgen.User,
+	candidates []dbgen.GetAvailableVolunteersRow,
+	matchID string,
+	callType string,
+) (AssistantMatchResult, error) {
+	if len(candidates) == 0 {
+		return AssistantMatchResult{
+			Status:   "unavailable",
+			MatchID:  matchID,
+			CallType: callType,
+			Message:  "no volunteer is currently available",
+		}, nil
+	}
+
+	roomName := "vol-" + matchID[:8]
+	if err := s.lk.CreateRoomWithTimeout(ctx, roomName, 300); err != nil {
+		return AssistantMatchResult{}, fmt.Errorf("create room: %w", err)
+	}
+
+	for _, candidate := range candidates {
+		volunteerID := pgutil.PgUUIDToString(candidate.UserID)
+		calleeToken, err := s.lk.CreateToken(roomName, volunteerID, candidate.DisplayName)
+		if err != nil {
+			slog.Error("matchCandidates: create volunteer token", "error", err, "volunteer_id", volunteerID)
+			continue
+		}
+
+		s.sendVolunteerIncomingCall(ctx, user, userID, candidate, roomName, calleeToken, matchID, callType)
+		if !s.waitForJoin(ctx, roomName, userID, 30*time.Second) {
+			continue
+		}
+
+		callerToken, err := s.lk.CreateToken(roomName, userID, user.DisplayName)
+		if err != nil {
+			slog.Error("matchCandidates: create caller token", "error", err)
+			continue
+		}
+
+		if err := s.q.IncrementVolunteerCalls(ctx, candidate.UserID); err != nil {
+			slog.Error("matchCandidates: increment volunteer calls", "error", err)
+		}
+
+		return AssistantMatchResult{
+			Status:        "matched",
+			MatchID:       matchID,
+			VolunteerID:   volunteerID,
+			VolunteerName: candidate.DisplayName,
+			RoomName:      roomName,
+			UserToken:     callerToken,
+			CallType:      callType,
+		}, nil
+	}
+
+	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
+		slog.Error("matchCandidates: delete room", "room", roomName, "error", err)
+	}
+
+	return AssistantMatchResult{
+		Status:   "search_timeout",
+		MatchID:  matchID,
+		CallType: callType,
+		Message:  "no volunteer answered in time",
+	}, nil
+}
+
+func (s *Service) sendVolunteerIncomingCall(
+	ctx context.Context,
+	user dbgen.User,
+	userID string,
+	candidate dbgen.GetAvailableVolunteersRow,
+	roomName string,
+	calleeToken string,
+	matchID string,
+	callType string,
+) {
+	payload := map[string]string{
+		"type":        "incoming_call",
+		"room_name":   roomName,
+		"user_id":     userID,
+		"caller_id":   userID,
+		"caller_name": user.DisplayName,
+		"call_type":   normalizeCallType(callType),
+		"token":       calleeToken,
+		"match_id":    matchID,
+	}
+	if user.AvatarUrl.Valid {
+		payload["caller_avatar_url"] = user.AvatarUrl.String
+	}
+
+	s.pusher.Send(ctx, push.UserTokens{
+		FcmToken:      candidate.FcmToken,
+		ApnsToken:     candidate.ApnsToken,
+		ApnsVoipToken: candidate.ApnsVoipToken,
+	}, push.Notification{
+		Title: "AiSee - " + user.DisplayName,
+		Body:  i18n.T(i18n.FromUserSettings(candidate.Settings), "notif.volunteer.body"),
+		Type:  "voip",
+		Data:  payload,
+	})
+}
+
+func normalizeCallType(callType string) string {
+	if callType == "video" {
+		return "video"
+	}
+	return "voice"
 }

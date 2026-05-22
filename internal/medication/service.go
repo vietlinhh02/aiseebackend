@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/push"
 	"github.com/team-dang/aiseebackend/pkg/reminder"
@@ -387,16 +388,15 @@ func (s *Service) OnDue(
 			"error", err,
 		)
 	} else {
+		lang := i18n.FromUserSettings(user.Settings)
 		s.pusher.Send(ctx, push.UserTokens{
 			FcmToken:      user.FcmToken,
 			ApnsToken:     user.ApnsToken,
 			ApnsVoipToken: user.ApnsVoipToken,
 		}, push.Notification{
-			Title: "Nhắc uống thuốc",
-			Body: fmt.Sprintf(
-				"Đã đến giờ uống %s (%s)",
-				med.Name, med.Dosage,
-			),
+			Title: i18n.T(lang, "notif.medication.title"),
+			Body: i18n.T(lang, "notif.medication.body",
+				med.Name, med.Dosage),
 			Type: "normal",
 			Data: map[string]string{
 				"type":          "medication_reminder",

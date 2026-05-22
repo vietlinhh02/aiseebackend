@@ -2,7 +2,7 @@ package user
 
 import (
 	"crypto/rand"
-	"encoding/hex"
+	"fmt"
 )
 
 func GenerateInviteCode() string {
@@ -10,5 +10,6 @@ func GenerateInviteCode() string {
 	if _, err := rand.Read(b); err != nil {
 		panic("generate invite code: " + err.Error())
 	}
-	return hex.EncodeToString(b)
+	value := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	return fmt.Sprintf("%06d", value%1000000)
 }

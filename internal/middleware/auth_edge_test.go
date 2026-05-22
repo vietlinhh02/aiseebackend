@@ -32,7 +32,7 @@ func TestAuthMiddleware_WrongSigningMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := middleware.Auth(secret, nil)(http.HandlerFunc(
+	handler := middleware.Auth(secret, nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		},
@@ -49,7 +49,7 @@ func TestAuthMiddleware_WrongSigningMethod(t *testing.T) {
 }
 
 func TestAuthMiddleware_EmptyBearerToken(t *testing.T) {
-	handler := middleware.Auth("secret", nil)(http.HandlerFunc(
+	handler := middleware.Auth("secret", nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		},
@@ -73,7 +73,7 @@ func TestAuthMiddleware_WrongSecret(t *testing.T) {
 	})
 	tokenStr, _ := token.SignedString([]byte("secret-one-32-chars-long-xxxxx"))
 
-	handler := middleware.Auth("secret-two-32-chars-long-xxxxx", nil)(
+	handler := middleware.Auth("secret-two-32-chars-long-xxxxx", nil, nil)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		}),
@@ -94,11 +94,12 @@ func TestAuthMiddleware_RoleInContext(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  "user-456",
 		"role": "family",
+		"type": "access",
 		"exp":  time.Now().Add(time.Hour).Unix(),
 	})
 	tokenStr, _ := token.SignedString([]byte(secret))
 
-	handler := middleware.Auth(secret, nil)(http.HandlerFunc(
+	handler := middleware.Auth(secret, nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			role := middleware.RoleFromContext(r.Context())
 			if role != "family" {
@@ -119,7 +120,7 @@ func TestAuthMiddleware_RoleInContext(t *testing.T) {
 }
 
 func TestAuthMiddleware_MalformedToken(t *testing.T) {
-	handler := middleware.Auth("secret", nil)(http.HandlerFunc(
+	handler := middleware.Auth("secret", nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		},

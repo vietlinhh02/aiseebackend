@@ -10,6 +10,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 )
 
 const defaultSessionTTL = 5 * time.Minute
@@ -19,11 +21,17 @@ const (
 	MediaModeCameraJPEG = "camera_jpeg"
 )
 
+type userService interface {
+	GetMe(ctx context.Context, userID string) (dbgen.User, error)
+	GetFamily(ctx context.Context, userID string) ([]dbgen.User, error)
+}
+
 type Service struct {
-	jwtSecret  string
-	sessionTTL time.Duration
-	now        func() time.Time
-	bridge     Bridge
+	jwtSecret   string
+	sessionTTL  time.Duration
+	now         func() time.Time
+	bridge      Bridge
+	userService userService
 }
 
 func NewService(jwtSecret string) *Service {
@@ -43,21 +51,62 @@ func NewServiceWithBridge(jwtSecret string, bridge Bridge) *Service {
 	}
 }
 
-func (s *Service) CreateSession(userID, role, wsURL string) (*SessionDescriptor, error) {
+func (s *Service) WithUserService(uSvc userService) *Service {
+	s.userService = uSvc
+	return s
+}
+
+func (s *Service) CreateSession(ctx context.Context, userID, role, wsURL string) (*SessionDescriptor, error) {
 	if userID == "" {
 		return nil, fmt.Errorf("missing user id")
+	}
+
+	var hasFamilyLink bool
+	var displayName string
+	accessibility := "low_vision"
+	locale := "vi"
+
+	if s.userService != nil {
+		if u, err := s.userService.GetMe(ctx, userID); err == nil {
+			displayName = u.DisplayName
+			locale = i18n.FromUserSettings(u.Settings)
+			if len(u.Settings) > 0 {
+				var settingsMap map[string]any
+				if err := json.Unmarshal(u.Settings, &settingsMap); err == nil {
+					if acc, ok := settingsMap["accessibility"].(string); ok && acc != "" {
+						accessibility = acc
+					}
+				}
+			}
+		}
+
+		if family, err := s.userService.GetFamily(ctx, userID); err == nil {
+			if len(family) > 0 {
+				hasFamilyLink = true
+			}
+		}
 	}
 
 	sessionID := "ai-" + uuid.NewString()
 	expiresAt := s.now().Add(s.sessionTTL).UTC()
 
+	profileClaims := map[string]any{
+		"user_name":       displayName,
+		"display_name":    displayName,
+		"accessibility":   accessibility,
+		"has_family_link": hasFamilyLink,
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":   userID,
-		"role":  role,
-		"type":  "assistant_session",
-		"scope": "ai_ws",
-		"sid":   sessionID,
-		"exp":   expiresAt.Unix(),
+		"sub":           userID,
+		"role":          role,
+		"type":          "assistant_session",
+		"scope":         "ai_ws",
+		"sid":           sessionID,
+		"locale":        locale,
+		"profile":       profileClaims,
+		"wake_greeting": false,
+		"exp":           expiresAt.Unix(),
 	})
 
 	tokenStr, err := token.SignedString([]byte(s.jwtSecret))
@@ -77,6 +126,7 @@ func (s *Service) CreateSession(userID, role, wsURL string) (*SessionDescriptor,
 			SampleRate: 16000,
 			Channels:   1,
 		},
+
 		AudioOutput: AudioFormat{
 			Encoding:   "pcm_s16le",
 			SampleRate: 24000,

@@ -73,6 +73,25 @@ func TestCareGroupBillingMigrationBackfillsLegacyBillingRows(t *testing.T) {
 	}
 }
 
+func TestDefaultCareGroupCanCreateBillingGroupForFreshSupportUser(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatalf("read billing store: %v", err)
+	}
+	body := string(src)
+
+	if strings.Contains(body, "WHERE role = 'user'\n\t\t\t  AND NOT EXISTS") {
+		t.Fatal("DefaultCareGroup still restricts first billing group creation to user role")
+	}
+	if strings.Contains(body, "WITH current_user AS") {
+		t.Fatal("DefaultCareGroup uses reserved keyword current_user as a CTE name")
+	}
+	if !strings.Contains(body, "SELECT 'AiSee Care Group', id") ||
+		!strings.Contains(body, "WHERE NOT EXISTS") {
+		t.Fatal("DefaultCareGroup should create a billing group for any fresh account with no billing group")
+	}
+}
+
 func TestBillingTransactionsMigrationCreatesProviderEventLedger(t *testing.T) {
 	sql, err := os.ReadFile("../../db/migrations/013_billing_transactions.up.sql")
 	if err != nil {

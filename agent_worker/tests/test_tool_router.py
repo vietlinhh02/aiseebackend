@@ -93,6 +93,136 @@ async def test_router_dispatches_backend_only_tool():
 
 
 @pytest.mark.anyio
+async def test_router_dispatches_family_status_tool():
+    backend = FakeBackend()
+    participant = FakeParticipant()
+    router = ToolRouter(
+        backend=backend,
+        local_participant=participant,
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    result = await router.call("list_family_contacts", {})
+
+    assert result == {"status": "ok", "tool": "list_family_contacts"}
+    assert backend.calls == [("tool_call", "list_family_contacts", "u1", {})]
+    assert participant.rpc_calls == []
+
+
+@pytest.mark.anyio
+async def test_router_family_call_alias_prepares_and_starts_call():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "answered"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    async def tool_call(tool, user_id, params):
+        backend.calls.append(("tool_call", tool, user_id, params))
+        return {
+            "status": "prepared",
+            "mode": "family",
+            "room_name": "call-1",
+            "token": "caller-token",
+            "call_type": "voice",
+            "contact_id": "f1",
+            "contact_name": "Me",
+            "contact_role": "family",
+            "answer_timeout_seconds": 30,
+        }
+
+    backend.tool_call = tool_call
+
+    result = await router.call("make_voice_call", {"contact_name": "Me"})
+
+    assert result["status"] == "answered"
+    assert backend.calls == [
+        ("tool_call", "call_family_contact", "u1", {"contact_name": "Me", "call_type": "voice"})
+    ]
+    event, timeout = transport.tool_requests[0]
+    assert event.payload["name"] == "start_call"
+    assert event.payload["params"]["room_name"] == "call-1"
+    assert timeout == 40.0
+
+
+@pytest.mark.anyio
+async def test_router_family_no_answer_preserves_fallback_contacts():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "no_answer"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    async def tool_call(tool, user_id, params):
+        backend.calls.append(("tool_call", tool, user_id, params))
+        return {
+            "status": "prepared",
+            "mode": "family",
+            "room_name": "call-2",
+            "token": "caller-token",
+            "call_type": "voice",
+            "contact_id": "f1",
+            "contact_name": "Me",
+            "contact_role": "family",
+            "answer_timeout_seconds": 30,
+            "fallback_contacts": [
+                {"id": "f2", "display_name": "Chi Lan", "relationship": "Chi"}
+            ],
+        }
+
+    backend.tool_call = tool_call
+
+    result = await router.call("call_family_contact", {"contact_name": "Me"})
+
+    assert result["status"] == "no_answer"
+    assert result["fallback_contacts"] == [
+        {"id": "f2", "display_name": "Chi Lan", "relationship": "Chi"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_router_support_call_alias_uses_timeout_backend_call():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "answered"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    async def tool_call_with_timeout(tool, user_id, params, timeout):
+        backend.calls.append(("tool_call_with_timeout", tool, user_id, params, timeout))
+        return {
+            "status": "prepared",
+            "mode": "volunteer",
+            "room_name": "vol-1",
+            "token": "caller-token",
+            "call_type": "voice",
+            "contact_id": "v1",
+            "contact_name": "Tinh nguyen vien",
+            "contact_role": "volunteer",
+            "answer_timeout_seconds": 12,
+        }
+
+    backend.tool_call_with_timeout = tool_call_with_timeout
+
+    result = await router.call("call_support_contact", {})
+
+    assert result["status"] == "answered"
+    assert backend.calls == [
+        ("tool_call_with_timeout", "call_support_contact", "u1", {"contact_name": "", "call_type": "voice"}, 45.0)
+    ]
+    event, timeout = transport.tool_requests[0]
+    assert event.payload["name"] == "start_call"
+    assert event.payload["params"]["contact_role"] == "volunteer"
+    assert timeout == 22.0
+
+
+@pytest.mark.anyio
 async def test_router_dispatches_rpc_only_tool():
     backend = FakeBackend()
     participant = FakeParticipant()
@@ -109,6 +239,52 @@ async def test_router_dispatches_rpc_only_tool():
     assert participant.rpc_calls[0]["method"] == "disable_camera"
     assert backend.calls == []
 
+
+@pytest.mark.anyio
+async def test_router_blocks_camera_without_explicit_consent():
+    backend = FakeBackend()
+    participant = FakeParticipant()
+    router = ToolRouter(
+        backend=backend,
+        local_participant=participant,
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    result = await router.call("activate_camera", {"reason": "Doc nhan thuoc"})
+
+    assert result["status"] == "blocked"
+    assert result["error"] == "camera_consent_required"
+    assert participant.rpc_calls == []
+    assert backend.calls == []
+
+@pytest.mark.anyio
+async def test_router_allows_camera_after_explicit_confirmation():
+    backend = FakeBackend()
+    participant = FakeParticipant()
+    router = ToolRouter(
+        backend=backend,
+        local_participant=participant,
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    result = await router.call(
+        "activate_camera",
+        {
+            "reason": "Doc nhan thuoc",
+            "consent_source": "explicit_confirmation",
+            "consent_phrase": "uh mo di",
+        },
+    )
+
+    assert result == {"status": "ok", "method": "enable_camera"}
+    assert participant.rpc_calls[0]["method"] == "enable_camera"
+    assert backend.calls[0] == ("check_quota", "u1", "camera_activations", 1)
+    assert backend.calls[1][0] == "record_usage"
+    assert backend.calls[1][-1] == {
+        "reason": "Doc nhan thuoc",
+        "consent_source": "explicit_confirmation",
+        "consent_phrase": "uh mo di",
+    }
 
 @pytest.mark.anyio
 async def test_router_logs_rpc_tool_destination(caplog):
@@ -247,3 +423,106 @@ async def test_router_web_search_uses_search_client():
     assert result["results"][0]["url"] == "https://example.test/result"
     assert search_client.calls == [("tin mới hôm nay", 3)]
     assert backend.calls == []
+
+
+@pytest.mark.anyio
+async def test_router_escalate_to_family_starts_prepared_call():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "answered"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1", "user_identity": "phone1"},
+    )
+
+    async def tool_call(tool, user_id, params):
+        backend.calls.append(("tool_call", tool, user_id, params))
+        return {
+            "status": "prepared",
+            "mode": "family",
+            "room_name": "esc-room",
+            "token": "caller-token",
+            "contact_id": "f1",
+            "contact_name": "Mom",
+            "contact_role": "family",
+            "answer_timeout_seconds": 30,
+        }
+
+    backend.tool_call = tool_call
+
+    result = await router.call(
+        "escalate_to_family",
+        {"contact_name": "Mom", "skip": ["Dad", ""]},
+    )
+
+    assert result["status"] == "answered"
+    assert backend.calls == [
+        (
+            "tool_call",
+            "escalate_to_family",
+            "u1",
+            {"contact_name": "Mom", "skip": ["Dad"]},
+        )
+    ]
+    event, _ = transport.tool_requests[0]
+    assert event.payload["name"] == "start_call"
+    assert event.payload["params"]["room_name"] == "esc-room"
+    assert event.payload["params"]["contact_name"] == "Mom"
+
+
+@pytest.mark.anyio
+async def test_router_escalate_to_family_no_contacts_skips_device_call():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "should_not_be_called"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1"},
+    )
+
+    async def tool_call(tool, user_id, params):
+        backend.calls.append(("tool_call", tool, user_id, params))
+        return {"status": "no_contacts"}
+
+    backend.tool_call = tool_call
+
+    result = await router.call("escalate_to_family", {})
+
+    assert result == {"status": "no_contacts"}
+    assert transport.tool_requests == []
+
+
+@pytest.mark.anyio
+async def test_router_answer_incoming_call_dispatches_to_device():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "answered", "room_name": "call-1"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1"},
+    )
+
+    result = await router.call("answer_incoming_call", {})
+
+    assert result == {"status": "answered", "room_name": "call-1"}
+    assert len(transport.tool_requests) == 1
+    event, _ = transport.tool_requests[0]
+    assert event.payload["name"] == "answer_incoming_call"
+
+
+@pytest.mark.anyio
+async def test_router_decline_incoming_call_dispatches_to_device():
+    backend = FakeBackend()
+    transport = FakeTransport(result={"status": "declined"})
+    router = ToolRouter(
+        backend=backend,
+        device_channel=TransportDeviceCommandChannel(transport=transport),
+        user_context={"user_id": "u1"},
+    )
+
+    result = await router.call("decline_incoming_call", {})
+
+    assert result == {"status": "declined"}
+    assert len(transport.tool_requests) == 1
+    event, _ = transport.tool_requests[0]
+    assert event.payload["name"] == "decline_incoming_call"

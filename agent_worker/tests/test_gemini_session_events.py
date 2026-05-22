@@ -9,6 +9,7 @@ from gemini_bridge.session import GeminiLiveSettings
 from gemini_bridge.session import GoogleSDKBridge
 from gemini_bridge.session import cancel_track_tasks
 from gemini_bridge.session import send_wake_greeting
+from gemini_bridge.core import announce_incoming_call
 
 
 class FakeAudioPublisher:
@@ -206,6 +207,31 @@ async def test_send_wake_greeting_uses_realtime_input_text():
 
 
 @pytest.mark.anyio
+async def test_announce_incoming_call_describes_caller_and_actions():
+    session = FakeSession()
+
+    await announce_incoming_call(
+        session,
+        {"caller_name": "Lan", "call_type": "voice"},
+    )
+
+    assert len(session.realtime_text) == 1
+    text = session.realtime_text[0]
+    assert "Lan" in text
+    assert "answer_incoming_call" in text
+    assert "decline_incoming_call" in text
+
+
+@pytest.mark.anyio
+async def test_announce_incoming_call_uses_default_caller():
+    session = FakeSession()
+
+    await announce_incoming_call(session, {})
+
+    assert "ai do" in session.realtime_text[0]
+
+
+@pytest.mark.anyio
 async def test_receive_loop_keeps_session_open_across_turns():
     class FakeMultiTurnSession:
         def __init__(self):
@@ -254,4 +280,5 @@ def test_live_config_prompt_includes_exact_camera_tool_rules():
 
     assert "activate_camera" in config.system_instruction
     assert "deactivate_camera" in config.system_instruction
+    assert "dong y ro rang" in config.system_instruction
     assert "tắt đi" in config.system_instruction

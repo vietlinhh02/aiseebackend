@@ -14,25 +14,27 @@ import (
 )
 
 type fakeReadService struct {
-	plans              []Plan
-	billingOverviewID  string
-	billingOverview    BillingOverviewResponse
-	subscriptionUserID string
-	entitlementsUserID string
-	subscription       SubscriptionResponse
-	entitlements       EntitlementsResponse
-	usageUserID        string
-	usage              UsageResponse
-	quotaInput         QuotaCheckInput
-	quotaDecision      QuotaDecision
-	recordInput        UsageRecordInput
-	aiCostInput        AICostEventInput
-	sessionInput       UsageSessionInput
-	commitInput        CommitUsageSessionInput
-	grantInput         UsageGrantInput
-	revenueCatPayload  RevenueCatWebhookPayload
-	revenueCatConfig   RevenueCatConfig
-	revenueCatResult   RevenueCatSyncResult
+	plans                []Plan
+	billingOverviewInput BillingOverviewInput
+	billingOverview      BillingOverviewResponse
+	subscriptionUserID   string
+	subscriptionInput    BillingOverviewInput
+	entitlementsUserID   string
+	entitlementsInput    BillingOverviewInput
+	subscription         SubscriptionResponse
+	entitlements         EntitlementsResponse
+	usageInput           BillingOverviewInput
+	usage                UsageResponse
+	quotaInput           QuotaCheckInput
+	quotaDecision        QuotaDecision
+	recordInput          UsageRecordInput
+	aiCostInput          AICostEventInput
+	sessionInput         UsageSessionInput
+	commitInput          CommitUsageSessionInput
+	grantInput           UsageGrantInput
+	revenueCatPayload    RevenueCatWebhookPayload
+	revenueCatConfig     RevenueCatConfig
+	revenueCatResult     RevenueCatSyncResult
 }
 
 func (f *fakeReadService) ListPlans(
@@ -49,11 +51,19 @@ func (f *fakeReadService) CurrentSubscription(
 	return f.subscription, nil
 }
 
+func (f *fakeReadService) CurrentSubscriptionForBilling(
+	_ context.Context,
+	input BillingOverviewInput,
+) (SubscriptionResponse, error) {
+	f.subscriptionInput = input
+	return f.subscription, nil
+}
+
 func (f *fakeReadService) CurrentBillingOverview(
 	_ context.Context,
-	userID string,
+	input BillingOverviewInput,
 ) (BillingOverviewResponse, error) {
-	f.billingOverviewID = userID
+	f.billingOverviewInput = input
 	return f.billingOverview, nil
 }
 
@@ -65,11 +75,20 @@ func (f *fakeReadService) CurrentEntitlements(
 	return f.entitlements, nil
 }
 
+func (f *fakeReadService) CurrentEntitlementsForBilling(
+	_ context.Context,
+	input BillingOverviewInput,
+) (EntitlementsResponse, error) {
+	f.entitlementsInput = input
+	f.entitlementsUserID = input.UserID
+	return f.entitlements, nil
+}
+
 func (f *fakeReadService) CurrentUsage(
 	_ context.Context,
-	userID string,
+	input BillingOverviewInput,
 ) (UsageResponse, error) {
-	f.usageUserID = userID
+	f.usageInput = input
 	return f.usage, nil
 }
 
@@ -305,8 +324,8 @@ func TestCurrentBillingOverviewUsesAuthenticatedUserAndReturnsCareGroup(
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if svc.billingOverviewID != "00000000-0000-0000-0000-000000000456" {
-		t.Fatalf("handler used user id %q", svc.billingOverviewID)
+	if svc.billingOverviewInput.UserID != "00000000-0000-0000-0000-000000000456" {
+		t.Fatalf("handler used input %+v", svc.billingOverviewInput)
 	}
 
 	var resp BillingOverviewResponse
@@ -321,6 +340,33 @@ func TestCurrentBillingOverviewUsesAuthenticatedUserAndReturnsCareGroup(
 	}
 	if got := resp.Usage.Quotas[UsageAIMinutes].Remaining; got != 120 {
 		t.Fatalf("unexpected remaining AI quota %.2f", got)
+	}
+}
+
+func TestCurrentBillingOverviewPassesCareContextQuery(t *testing.T) {
+	svc := &fakeReadService{billingOverview: BillingOverviewResponse{
+		CareGroup: CareGroupSummary{ID: "group-1"},
+	}}
+	h := NewHandler(svc)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/me/billing-overview?care_group_id=group-1&cared_user_id=user-a",
+		nil,
+	)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "family-1"))
+	rr := httptest.NewRecorder()
+
+	h.CurrentBillingOverview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.billingOverviewInput != (BillingOverviewInput{
+		UserID:      "family-1",
+		CareGroupID: "group-1",
+		CaredUserID: "user-a",
+	}) {
+		t.Fatalf("unexpected billing input: %+v", svc.billingOverviewInput)
 	}
 }
 
@@ -410,8 +456,10 @@ func TestCurrentSubscriptionUsesAuthenticatedUser(
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if svc.subscriptionUserID != "00000000-0000-0000-0000-000000000123" {
-		t.Fatalf("handler used user id %q", svc.subscriptionUserID)
+	if svc.subscriptionInput != (BillingOverviewInput{
+		UserID: "00000000-0000-0000-0000-000000000123",
+	}) {
+		t.Fatalf("handler used input %+v", svc.subscriptionInput)
 	}
 
 	var resp SubscriptionResponse
@@ -420,6 +468,35 @@ func TestCurrentSubscriptionUsesAuthenticatedUser(
 	}
 	if resp.Subscription == nil || resp.Subscription.PlanCode != "plus_399k" {
 		t.Fatalf("unexpected subscription response: %+v", resp.Subscription)
+	}
+}
+
+func TestCurrentSubscriptionUsesBillingContextQuery(t *testing.T) {
+	svc := &fakeReadService{
+		subscription: SubscriptionResponse{
+			EffectivePlan: PlanSummary{Code: "plus_399k", Name: "Care Plus"},
+		},
+	}
+	h := NewHandler(svc)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/me/subscription?care_group_id=group-1&cared_user_id=user-a",
+		nil,
+	)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "family-1"))
+	rr := httptest.NewRecorder()
+	h.CurrentSubscription(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.subscriptionInput != (BillingOverviewInput{
+		UserID:      "family-1",
+		CareGroupID: "group-1",
+		CaredUserID: "user-a",
+	}) {
+		t.Fatalf("unexpected subscription input: %+v", svc.subscriptionInput)
 	}
 }
 
@@ -473,6 +550,40 @@ func TestCurrentEntitlementsReturnsFeatureMap(
 	}
 }
 
+func TestCurrentEntitlementsUsesBillingContextQuery(t *testing.T) {
+	svc := &fakeReadService{
+		entitlements: EntitlementsResponse{
+			Plan: PlanSummary{Code: "plus_399k", Name: "Care Plus"},
+		},
+	}
+	h := NewHandler(svc)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/me/entitlements?care_group_id=group-1&cared_user_id=user-a",
+		nil,
+	)
+	req = req.WithContext(
+		middleware.WithUserID(
+			req.Context(),
+			"00000000-0000-0000-0000-000000000456",
+		),
+	)
+	rr := httptest.NewRecorder()
+	h.CurrentEntitlements(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.entitlementsInput != (BillingOverviewInput{
+		UserID:      "00000000-0000-0000-0000-000000000456",
+		CareGroupID: "group-1",
+		CaredUserID: "user-a",
+	}) {
+		t.Fatalf("unexpected entitlements input: %+v", svc.entitlementsInput)
+	}
+}
+
 func TestCurrentUsageUsesAuthenticatedUser(t *testing.T) {
 	svc := &fakeReadService{
 		usage: UsageResponse{
@@ -502,8 +613,35 @@ func TestCurrentUsageUsesAuthenticatedUser(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if svc.usageUserID != "00000000-0000-0000-0000-000000000456" {
-		t.Fatalf("handler used user id %q", svc.usageUserID)
+	if svc.usageInput.UserID != "00000000-0000-0000-0000-000000000456" {
+		t.Fatalf("handler used input %+v", svc.usageInput)
+	}
+}
+
+func TestCurrentUsagePassesCareContextQuery(t *testing.T) {
+	svc := &fakeReadService{
+		usage: UsageResponse{Plan: PlanSummary{Code: "free"}},
+	}
+	h := NewHandler(svc)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/me/usage?care_group_id=group-1&cared_user_id=user-a",
+		nil,
+	)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "family-1"))
+	rr := httptest.NewRecorder()
+	h.CurrentUsage(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.usageInput != (BillingOverviewInput{
+		UserID:      "family-1",
+		CareGroupID: "group-1",
+		CaredUserID: "user-a",
+	}) {
+		t.Fatalf("unexpected usage input: %+v", svc.usageInput)
 	}
 }
 

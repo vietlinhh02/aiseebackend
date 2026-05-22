@@ -47,6 +47,10 @@ func (s *PGStore) LoadWindow(
 	if err != nil {
 		return WindowData{}, err
 	}
+	careEv, err := s.loadCareEvents(ctx, userID, start, end)
+	if err != nil {
+		return WindowData{}, err
+	}
 	return WindowData{
 		Medications:    medications,
 		MedicationLogs: logs,
@@ -54,6 +58,7 @@ func (s *PGStore) LoadWindow(
 		Metrics:        metrics,
 		Audits:         audits,
 		Calls:          calls,
+		CareEvents:     careEv,
 	}, nil
 }
 

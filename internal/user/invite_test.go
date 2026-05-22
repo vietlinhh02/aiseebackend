@@ -8,13 +8,13 @@ import (
 func TestGenerateInviteCode_Format(t *testing.T) {
 	code := GenerateInviteCode()
 
-	if len(code) != 8 {
-		t.Errorf("expected 8-character code, got %d characters: %q", len(code), code)
+	if len(code) != 6 {
+		t.Errorf("expected 6-character code, got %d characters: %q", len(code), code)
 	}
 
-	hexPattern := regexp.MustCompile(`^[0-9a-f]{8}$`)
-	if !hexPattern.MatchString(code) {
-		t.Errorf("expected lowercase hex string, got %q", code)
+	digitPattern := regexp.MustCompile(`^[0-9]{6}$`)
+	if !digitPattern.MatchString(code) {
+		t.Errorf("expected 6-digit numeric string, got %q", code)
 	}
 }
 

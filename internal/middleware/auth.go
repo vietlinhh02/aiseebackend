@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -27,7 +29,7 @@ func RoleFromContext(ctx context.Context) string {
 	return v
 }
 
-func Auth(secret string, rdb *redis.Client) func(http.Handler) http.Handler {
+func Auth(secret string, rdb *redis.Client, db *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -54,12 +56,44 @@ func Auth(secret string, rdb *redis.Client) func(http.Handler) http.Handler {
 			sub, _ := claims["sub"].(string)
 			role, _ := claims["role"].(string)
 
+			typ, _ := claims["type"].(string)
+			if typ != "access" {
+				response.Err(w, http.StatusUnauthorized, "invalid_token", "Token is not an access token")
+				return
+			}
+
 			// Fast-path: check if user is deactivated or role changed via Redis
-			// If key doesn't exist, we allow for now (it will be re-cached on next login/refresh)
-			// For stricter security, we could look up the DB if not in Redis.
 			if rdb != nil {
 				cachedRole, err := rdb.Get(r.Context(), "user:status:"+sub).Result()
-				if err == nil && cachedRole != role {
+				if err == nil {
+					if cachedRole != role {
+						response.Err(w, http.StatusUnauthorized, "role_changed", "User role has changed or account deactivated")
+						return
+					}
+				} else if err == redis.Nil {
+					// Cache miss: verify via Database fallback
+					if db != nil {
+						var dbRole string
+						if dbErr := db.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1`, sub).Scan(&dbRole); dbErr != nil {
+							response.Err(w, http.StatusUnauthorized, "invalid_user", "User not found or account deactivated")
+							return
+						}
+						if dbRole != role {
+							response.Err(w, http.StatusUnauthorized, "role_changed", "User role has changed or account deactivated")
+							return
+						}
+						// Cache the verified role back to Redis
+						rdb.Set(r.Context(), "user:status:"+sub, dbRole, time.Hour)
+					}
+				}
+			} else if db != nil {
+				// No Redis configured: verify directly from database
+				var dbRole string
+				if dbErr := db.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1`, sub).Scan(&dbRole); dbErr != nil {
+					response.Err(w, http.StatusUnauthorized, "invalid_user", "User not found or account deactivated")
+					return
+				}
+				if dbRole != role {
 					response.Err(w, http.StatusUnauthorized, "role_changed", "User role has changed or account deactivated")
 					return
 				}

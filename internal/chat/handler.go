@@ -42,6 +42,7 @@ type SendMessageRequest struct {
 	ReceiverID  string `json:"receiver_id"`
 	ContentText string `json:"content_text"`
 	VoiceURL    string `json:"voice_url"`
+	ImageURL    string `json:"image_url"`
 }
 
 func (h *Handler) SendMessage(
@@ -64,11 +65,11 @@ func (h *Handler) SendMessage(
 		)
 		return
 	}
-	if req.ContentText == "" && req.VoiceURL == "" {
+	if req.ContentText == "" && req.VoiceURL == "" && req.ImageURL == "" {
 		response.Err(
 			w, http.StatusBadRequest,
 			"empty_message",
-			"content_text or voice_url required",
+			"content_text, voice_url or image_url required",
 		)
 		return
 	}
@@ -87,7 +88,7 @@ func (h *Handler) SendMessage(
 
 	msg, err := h.service.SendMessage(
 		r.Context(), userID, req.ReceiverID,
-		req.ContentText, req.VoiceURL,
+		req.ContentText, req.VoiceURL, req.ImageURL,
 	)
 	if err != nil {
 		response.Err(

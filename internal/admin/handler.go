@@ -3,10 +3,13 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -32,6 +35,14 @@ type adminService interface {
 	RecordAdminTrackingEvent(ctx context.Context, actorID string, input AdminTrackingEventInput) (TrackingEvent, error)
 	ListBillingTransactions(ctx context.Context, page, limit int32) ([]AdminBillingTransaction, error)
 	ListUserBillingTransactions(ctx context.Context, userID string, page, limit int32) ([]AdminBillingTransaction, error)
+	ListIncidentsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminIncidentListItem, error)
+	ListCareAlertsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminCareAlertListItem, error)
+	InsertBillingRefundNote(ctx context.Context, billingTransactionID, adminUserID, note string) error
+	ManualGrantUsage(
+		ctx context.Context,
+		actorUserID, targetUserID string,
+		in ManualGrantInput,
+	) (billing.UsageGrant, error)
 }
 
 func NewHandler(svc adminService) *Handler {
@@ -281,17 +292,10 @@ func (h *Handler) RecordTrackingEvent(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, event)
 }
 
-type ManualGrantRequest struct {
-	UsageType string  `json:"usage_type"`
-	Quantity  float64 `json:"quantity"`
-	Unit      string  `json:"unit"`
-	Reason    string  `json:"reason"`
-}
-
 func (h *Handler) ManualGrant(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 
-	var req ManualGrantRequest
+	var req ManualGrantInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
@@ -300,15 +304,110 @@ func (h *Handler) ManualGrant(w http.ResponseWriter, r *http.Request) {
 		response.Err(w, http.StatusBadRequest, "validation", "usage_type, quantity (>0), and reason are required")
 		return
 	}
+	if strings.TrimSpace(req.Unit) == "" {
+		response.Err(w, http.StatusBadRequest, "validation", "unit is required")
+		return
+	}
+
+	grant, err := h.svc.ManualGrantUsage(
+		r.Context(),
+		middleware.UserIDFromContext(r.Context()),
+		userID,
+		req,
+	)
+	if err != nil {
+		if errors.Is(err, ErrManualGrantBillingDisabled) {
+			response.Err(w, http.StatusServiceUnavailable, "billing_unconfigured", err.Error())
+			return
+		}
+		response.Err(w, http.StatusBadRequest, "manual_grant_failed", err.Error())
+		return
+	}
 
 	response.JSON(w, http.StatusCreated, map[string]any{
 		"status":     "granted",
+		"grant":      grant,
 		"user_id":    userID,
 		"usage_type": req.UsageType,
 		"quantity":   req.Quantity,
 		"unit":       req.Unit,
 		"reason":     req.Reason,
 	})
+}
+
+func (h *Handler) ListIncidents(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	limit := int32Param(r, "limit", 50)
+	items, err := h.svc.ListIncidentsForAdmin(r.Context(), userID, limit)
+	if err != nil {
+		response.Err(w, http.StatusInternalServerError, "incidents_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"incidents": items})
+}
+
+func (h *Handler) ListCareAlerts(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	limit := int32Param(r, "limit", 50)
+	items, err := h.svc.ListCareAlertsForAdmin(r.Context(), userID, limit)
+	if err != nil {
+		response.Err(w, http.StatusInternalServerError, "alerts_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"alerts": items})
+}
+
+func (h *Handler) GetUserPayments(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "user_id")
+	page := int32Param(r, "page", 1)
+	limit := int32Param(r, "limit", 50)
+	if limit > 200 {
+		limit = 200
+	}
+	tx, err := h.svc.ListUserBillingTransactions(r.Context(), userID, page, limit)
+	if err != nil {
+		response.Err(w, http.StatusInternalServerError, "payments_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"payments": tx, "page": page, "limit": limit})
+}
+
+func (h *Handler) GetUserInvoices(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "user_id")
+	page := int32Param(r, "page", 1)
+	limit := int32Param(r, "limit", 50)
+	if limit > 200 {
+		limit = 200
+	}
+	tx, err := h.svc.ListUserBillingTransactions(r.Context(), userID, page, limit)
+	if err != nil {
+		response.Err(w, http.StatusInternalServerError, "invoices_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"invoices": tx, "page": page, "limit": limit})
+}
+
+type refundNoteBody struct {
+	Note string `json:"note"`
+}
+
+func (h *Handler) PostPaymentRefundNote(w http.ResponseWriter, r *http.Request) {
+	paymentID := chi.URLParam(r, "payment_id")
+	adminID := middleware.UserIDFromContext(r.Context())
+	var body refundNoteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(body.Note) == "" {
+		response.Err(w, http.StatusBadRequest, "validation", "note is required")
+		return
+	}
+	if err := h.svc.InsertBillingRefundNote(r.Context(), paymentID, adminID, body.Note); err != nil {
+		response.Err(w, http.StatusInternalServerError, "refund_note_failed", err.Error())
+		return
+	}
+	response.JSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
 func int32Param(r *http.Request, key string, fallback int32) int32 {

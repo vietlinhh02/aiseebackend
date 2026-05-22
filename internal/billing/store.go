@@ -68,11 +68,17 @@ func (s *PgxStore) DefaultCareGroup(
 	userID string,
 ) (CareGroupSummary, error) {
 	row := s.db.QueryRow(ctx, `
-		WITH existing AS (
+		WITH requester AS (
+			SELECT id, role
+			FROM users
+			WHERE id = $1::uuid
+		),
+		existing AS (
 			SELECT
 				cg.id,
 				cg.name,
 				cg.owner_user_id,
+				cg.created_at,
 				cgm.role AS current_user_role,
 				CASE cgm.role
 					WHEN 'owner' THEN 0
@@ -100,6 +106,7 @@ func (s *PgxStore) DefaultCareGroup(
 				cg.id,
 				cg.name,
 				cg.owner_user_id,
+				cg.created_at,
 				'cared_user' AS current_user_role,
 				10 AS priority,
 				(
@@ -117,15 +124,18 @@ func (s *PgxStore) DefaultCareGroup(
 			WHERE cgu.user_id = $1::uuid
 			  AND cgu.deleted_at IS NULL
 			  AND cg.status = 'active'
-			ORDER BY priority
-			LIMIT 1
 		),
-		created AS (
-			INSERT INTO care_groups (name, owner_user_id)
-			SELECT 'AiSee Care Group', $1::uuid
-			WHERE NOT EXISTS (SELECT 1 FROM existing)
-			RETURNING id, name, owner_user_id
-		),
+			created AS (
+				INSERT INTO care_groups (name, owner_user_id)
+				SELECT 'AiSee Care Group', id
+				FROM requester
+				WHERE NOT EXISTS (
+						SELECT 1 FROM existing
+						WHERE current_user_role IN ('owner', 'billing_admin')
+					  )
+				  AND role <> 'user'
+					RETURNING id, name, owner_user_id
+			),
 		insert_member AS (
 			INSERT INTO care_group_members (care_group_id, user_id, role)
 			SELECT id, $1::uuid, 'owner' FROM created
@@ -142,13 +152,15 @@ func (s *PgxStore) DefaultCareGroup(
 		),
 		selected AS (
 			SELECT
-				id::text,
-				name,
-				owner_user_id::text,
-				current_user_role,
-				current_user_role IN ('owner', 'billing_admin') AS can_manage_billing,
-				cared_user_count,
-				member_count
+					id::text,
+					name,
+					owner_user_id::text,
+					created_at,
+					current_user_role,
+					current_user_role = 'owner' AS can_manage_billing,
+					cared_user_count,
+					member_count,
+					priority
 			FROM existing
 
 			UNION ALL
@@ -157,16 +169,19 @@ func (s *PgxStore) DefaultCareGroup(
 				id::text,
 				name,
 				owner_user_id::text,
+				now(),
 				'owner',
 				true,
 				1,
-				1
+				1,
+				-1
 			FROM created
 		)
 		SELECT
-			id, name, owner_user_id, current_user_role,
+			id, name, owner_user_id, created_at, current_user_role,
 			can_manage_billing, cared_user_count, member_count
 		FROM selected
+		ORDER BY priority, id
 		LIMIT 1
 	`, userID)
 
@@ -175,12 +190,219 @@ func (s *PgxStore) DefaultCareGroup(
 		&group.ID,
 		&group.Name,
 		&group.OwnerUserID,
+		&group.CreatedAt,
 		&group.CurrentUserRole,
 		&group.CanManageBilling,
 		&group.CaredUserCount,
 		&group.MemberCount,
 	); err != nil {
+		if err == pgx.ErrNoRows {
+			return CareGroupSummary{}, ErrNoBillingCareGroup
+		}
 		return CareGroupSummary{}, fmt.Errorf("default care group: %w", err)
+	}
+	return group, nil
+}
+
+func (s *PgxStore) ActiveCareGroup(
+	ctx context.Context,
+	userID string,
+) (CareGroupSummary, error) {
+	row := s.db.QueryRow(ctx, `
+		WITH memberships AS (
+			SELECT
+				cg.id,
+				cg.name,
+				cg.owner_user_id,
+				cg.created_at,
+				cgm.role AS current_user_role,
+				0 AS priority,
+				(
+					SELECT COUNT(*) FROM care_group_cared_users cgu
+					WHERE cgu.care_group_id = cg.id AND cgu.deleted_at IS NULL
+				)::int AS cared_user_count,
+				(
+					SELECT COUNT(*) FROM care_group_members cgm_count
+					WHERE cgm_count.care_group_id = cg.id
+					  AND cgm_count.deleted_at IS NULL
+				)::int AS member_count
+			FROM care_group_members cgm
+			JOIN care_groups cg ON cg.id = cgm.care_group_id
+			WHERE cgm.user_id = $1::uuid
+			  AND cgm.deleted_at IS NULL
+			  AND cg.status = 'active'
+
+			UNION ALL
+
+			SELECT
+				cg.id,
+				cg.name,
+				cg.owner_user_id,
+				cg.created_at,
+				'cared_user' AS current_user_role,
+				1 AS priority,
+				(
+					SELECT COUNT(*) FROM care_group_cared_users cgu_count
+					WHERE cgu_count.care_group_id = cg.id
+					  AND cgu_count.deleted_at IS NULL
+				)::int AS cared_user_count,
+				(
+					SELECT COUNT(*) FROM care_group_members cgm_count
+					WHERE cgm_count.care_group_id = cg.id
+					  AND cgm_count.deleted_at IS NULL
+				)::int AS member_count
+			FROM care_group_cared_users cgu
+			JOIN care_groups cg ON cg.id = cgu.care_group_id
+			WHERE cgu.user_id = $1::uuid
+			  AND cgu.deleted_at IS NULL
+			  AND cg.status = 'active'
+		)
+		SELECT
+			id::text,
+			name,
+			owner_user_id::text,
+			created_at,
+			current_user_role,
+			current_user_role = 'owner' AS can_manage_billing,
+			cared_user_count,
+			member_count
+		FROM memberships
+		ORDER BY priority, id
+		LIMIT 1
+	`, userID)
+
+	var group CareGroupSummary
+	if err := row.Scan(
+		&group.ID,
+		&group.Name,
+		&group.OwnerUserID,
+		&group.CreatedAt,
+		&group.CurrentUserRole,
+		&group.CanManageBilling,
+		&group.CaredUserCount,
+		&group.MemberCount,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return CareGroupSummary{}, ErrNoBillingCareGroup
+		}
+		return CareGroupSummary{}, fmt.Errorf("active care group: %w", err)
+	}
+	return group, nil
+}
+
+func (s *PgxStore) CareGroupForBilling(
+	ctx context.Context,
+	input BillingOverviewInput,
+) (CareGroupSummary, error) {
+	if input.CareGroupID == "" && input.CaredUserID == "" {
+		active, err := s.ActiveCareGroup(ctx, input.UserID)
+		if err == nil {
+			return active, nil
+		}
+		if err != ErrNoBillingCareGroup {
+			return CareGroupSummary{}, err
+		}
+		return s.DefaultCareGroup(ctx, input.UserID)
+	}
+	row := s.db.QueryRow(ctx, `
+		WITH requested AS (
+			SELECT
+				NULLIF($2, '')::uuid AS care_group_id,
+				NULLIF($3, '')::uuid AS cared_user_id
+		),
+		eligible AS (
+			SELECT
+				cg.id,
+				cg.name,
+				cg.owner_user_id,
+				cg.created_at,
+				cgm.role AS current_user_role,
+				CASE cgm.role
+					WHEN 'owner' THEN 0
+					WHEN 'billing_admin' THEN 1
+					ELSE 2
+				END AS priority,
+				(
+					SELECT COUNT(*) FROM care_group_cared_users cgu
+					WHERE cgu.care_group_id = cg.id AND cgu.deleted_at IS NULL
+				)::int AS cared_user_count,
+				(
+					SELECT COUNT(*) FROM care_group_members cgm_count
+					WHERE cgm_count.care_group_id = cg.id
+					  AND cgm_count.deleted_at IS NULL
+				)::int AS member_count
+			FROM requested req
+			JOIN care_groups cg ON cg.status = 'active'
+			JOIN care_group_members cgm ON cgm.care_group_id = cg.id
+			WHERE cgm.user_id = $1::uuid
+			  AND cgm.deleted_at IS NULL
+			  AND (req.care_group_id IS NULL OR cg.id = req.care_group_id)
+			  AND (
+				req.cared_user_id IS NULL
+				OR EXISTS (
+					SELECT 1 FROM care_group_cared_users cgu_target
+					WHERE cgu_target.care_group_id = cg.id
+					  AND cgu_target.user_id = req.cared_user_id
+					  AND cgu_target.deleted_at IS NULL
+				)
+			  )
+
+			UNION ALL
+
+			SELECT
+				cg.id,
+				cg.name,
+				cg.owner_user_id,
+				cg.created_at,
+				'cared_user' AS current_user_role,
+				10 AS priority,
+				(
+					SELECT COUNT(*) FROM care_group_cared_users cgu_count
+					WHERE cgu_count.care_group_id = cg.id
+					  AND cgu_count.deleted_at IS NULL
+				)::int AS cared_user_count,
+				(
+					SELECT COUNT(*) FROM care_group_members cgm_count
+					WHERE cgm_count.care_group_id = cg.id
+					  AND cgm_count.deleted_at IS NULL
+				)::int AS member_count
+			FROM requested req
+			JOIN care_groups cg ON cg.status = 'active'
+			JOIN care_group_cared_users cgu_self ON cgu_self.care_group_id = cg.id
+			WHERE cgu_self.user_id = $1::uuid
+			  AND cgu_self.deleted_at IS NULL
+			  AND (req.care_group_id IS NULL OR cg.id = req.care_group_id)
+			  AND (req.cared_user_id IS NULL OR cgu_self.user_id = req.cared_user_id)
+		)
+		SELECT
+			id::text,
+			name,
+			owner_user_id::text,
+			created_at,
+			current_user_role,
+			current_user_role = 'owner' AS can_manage_billing,
+			cared_user_count,
+			member_count
+		FROM eligible
+		ORDER BY priority, id
+		LIMIT 1
+	`, input.UserID, input.CareGroupID, input.CaredUserID)
+
+	var group CareGroupSummary
+	if err := row.Scan(
+		&group.ID,
+		&group.Name,
+		&group.OwnerUserID,
+		&group.CreatedAt,
+		&group.CurrentUserRole,
+		&group.CanManageBilling,
+		&group.CaredUserCount,
+		&group.MemberCount,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return CareGroupSummary{}, ErrNoBillingCareGroup
+		}
+		return CareGroupSummary{}, fmt.Errorf("billing care group: %w", err)
 	}
 	return group, nil
 }
@@ -271,6 +493,66 @@ func (s *PgxStore) CurrentSubscription(
 	return &sub, nil
 }
 
+func (s *PgxStore) SubscriptionByProviderRef(
+	ctx context.Context,
+	provider string,
+	providerSubscriptionID string,
+) (*Subscription, error) {
+	if providerSubscriptionID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(ctx, `
+		SELECT
+			s.id::text,
+			s.user_id::text,
+			COALESCE(s.care_group_id::text, ''),
+			s.plan_id::text,
+			p.code,
+			p.name,
+			s.status,
+			s.current_period_start,
+			s.current_period_end,
+			s.cancel_at_period_end,
+			COALESCE(s.provider, ''),
+			COALESCE(s.provider_subscription_id, ''),
+			COALESCE(s.metadata, '{}'::jsonb)
+		FROM subscriptions s
+		JOIN plans p ON p.id = s.plan_id
+		WHERE s.provider = $1
+		  AND s.provider_subscription_id = $2
+		ORDER BY s.created_at DESC
+		LIMIT 1
+	`, provider, providerSubscriptionID)
+
+	var sub Subscription
+	var start, end pgtype.Timestamptz
+	var metadata []byte
+	if err := row.Scan(
+		&sub.ID,
+		&sub.UserID,
+		&sub.CareGroupID,
+		&sub.PlanID,
+		&sub.PlanCode,
+		&sub.PlanName,
+		&sub.Status,
+		&start,
+		&end,
+		&sub.CancelAtPeriodEnd,
+		&sub.Provider,
+		&sub.ProviderSubscriptionID,
+		&metadata,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("subscription by provider ref: %w", err)
+	}
+	sub.CurrentPeriodStart = timestamptzPtr(start)
+	sub.CurrentPeriodEnd = timestamptzPtr(end)
+	sub.Metadata = decodeJSONMap(metadata)
+	return &sub, nil
+}
+
 func (s *PgxStore) CurrentSubscriptionForCareGroup(
 	ctx context.Context,
 	careGroupID string,
@@ -335,6 +617,79 @@ func (s *PgxStore) CurrentSubscriptionForCareGroup(
 	sub.CurrentPeriodEnd = timestamptzPtr(end)
 	sub.Metadata = decodeJSONMap(metadata)
 	return &sub, nil
+}
+
+func (s *PgxStore) ActiveSubscriptionsForCareGroup(
+	ctx context.Context,
+	careGroupID string,
+) ([]Subscription, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			s.id::text,
+			s.user_id::text,
+			COALESCE(s.care_group_id::text, ''),
+			s.plan_id::text,
+			p.code,
+			p.name,
+			s.status,
+			s.current_period_start,
+			s.current_period_end,
+			s.cancel_at_period_end,
+			COALESCE(s.provider, ''),
+			COALESCE(s.provider_subscription_id, ''),
+			COALESCE(s.metadata, '{}'::jsonb)
+		FROM subscriptions s
+		JOIN plans p ON p.id = s.plan_id
+		WHERE s.care_group_id = $1::uuid
+		  AND s.status IN ('trialing', 'active', 'past_due')
+		  AND p.status = 'active'
+		ORDER BY
+			CASE s.status
+				WHEN 'active' THEN 1
+				WHEN 'trialing' THEN 2
+				ELSE 3
+			END,
+			p.sort_order DESC,
+			p.price_vnd DESC,
+			s.current_period_end DESC NULLS LAST,
+			s.created_at DESC
+	`, careGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("active care group subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var subs []Subscription
+	for rows.Next() {
+		var sub Subscription
+		var start, end pgtype.Timestamptz
+		var metadata []byte
+		if err := rows.Scan(
+			&sub.ID,
+			&sub.UserID,
+			&sub.CareGroupID,
+			&sub.PlanID,
+			&sub.PlanCode,
+			&sub.PlanName,
+			&sub.Status,
+			&start,
+			&end,
+			&sub.CancelAtPeriodEnd,
+			&sub.Provider,
+			&sub.ProviderSubscriptionID,
+			&metadata,
+		); err != nil {
+			return nil, fmt.Errorf("scan active care group subscription: %w", err)
+		}
+		sub.CurrentPeriodStart = timestamptzPtr(start)
+		sub.CurrentPeriodEnd = timestamptzPtr(end)
+		sub.Metadata = decodeJSONMap(metadata)
+		subs = append(subs, sub)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active care group subscriptions: %w", err)
+	}
+	return subs, nil
 }
 
 func (s *PgxStore) UpsertProviderSubscription(

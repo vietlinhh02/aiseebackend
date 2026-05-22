@@ -2,8 +2,12 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/team-dang/aiseebackend/internal/billing"
 )
 
 type adminStore interface {
@@ -23,15 +27,77 @@ type adminStore interface {
 	RecordAdminTrackingEvent(ctx context.Context, actorID string, input AdminTrackingEventInput) (TrackingEvent, error)
 	ListBillingTransactions(ctx context.Context, page, limit int32) ([]AdminBillingTransaction, error)
 	ListUserBillingTransactions(ctx context.Context, userID string, page, limit int32) ([]AdminBillingTransaction, error)
+	ListIncidentsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminIncidentListItem, error)
+	ListCareAlertsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminCareAlertListItem, error)
+	InsertBillingRefundNote(ctx context.Context, billingTransactionID, adminUserID, note string) error
 	IsAdmin(ctx context.Context, userID string) (bool, error)
+}
+
+// ErrManualGrantBillingDisabled is returned when the server has no billing grant backend wired.
+var ErrManualGrantBillingDisabled = errors.New("admin: billing usage grant is not configured")
+
+type usageGranter interface {
+	GrantUsageQuota(ctx context.Context, input billing.UsageGrantInput) (billing.UsageGrant, error)
 }
 
 type Service struct {
 	store adminStore
+	grant usageGranter
 }
 
-func NewService(store adminStore) *Service {
-	return &Service{store: store}
+func NewService(store adminStore, grant usageGranter) *Service {
+	return &Service{store: store, grant: grant}
+}
+
+// ManualGrantInput is validated input for POST /api/admin/users/{user_id}/manual-grant.
+type ManualGrantInput struct {
+	UsageType string  `json:"usage_type"`
+	Quantity  float64 `json:"quantity"`
+	Unit      string  `json:"unit"`
+	Reason    string  `json:"reason"`
+}
+
+func (s *Service) ManualGrantUsage(
+	ctx context.Context,
+	actorUserID, targetUserID string,
+	in ManualGrantInput,
+) (billing.UsageGrant, error) {
+	var zero billing.UsageGrant
+	if s.grant == nil {
+		return zero, ErrManualGrantBillingDisabled
+	}
+	targetUserID = strings.TrimSpace(targetUserID)
+	if targetUserID == "" {
+		return zero, fmt.Errorf("target user_id is required")
+	}
+	if strings.TrimSpace(actorUserID) == "" {
+		return zero, fmt.Errorf("admin actor is required")
+	}
+	ut := billing.UsageType(strings.TrimSpace(in.UsageType))
+	if ut == "" {
+		return zero, fmt.Errorf("usage_type is required")
+	}
+	if in.Quantity <= 0 {
+		return zero, fmt.Errorf("quantity must be > 0")
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return zero, fmt.Errorf("reason is required")
+	}
+	unit := strings.TrimSpace(in.Unit)
+	if unit == "" {
+		return zero, fmt.Errorf("unit is required")
+	}
+	return s.grant.GrantUsageQuota(ctx, billing.UsageGrantInput{
+		UserID:      targetUserID,
+		UsageType:   ut,
+		Quantity:    in.Quantity,
+		Unit:        unit,
+		Reason:      strings.TrimSpace(in.Reason),
+		Source:      "admin",
+		SourceID:    uuid.New().String(),
+		GrantedByID: actorUserID,
+		Metadata:    map[string]any{"admin_manual": true},
+	})
 }
 
 func (s *Service) SearchUsers(ctx context.Context, query string, page, limit int32) ([]UserResult, error) {
@@ -113,6 +179,18 @@ func (s *Service) ListBillingTransactions(ctx context.Context, page, limit int32
 
 func (s *Service) ListUserBillingTransactions(ctx context.Context, userID string, page, limit int32) ([]AdminBillingTransaction, error) {
 	return s.store.ListUserBillingTransactions(ctx, userID, page, limit)
+}
+
+func (s *Service) ListIncidentsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminIncidentListItem, error) {
+	return s.store.ListIncidentsForAdmin(ctx, userID, limit)
+}
+
+func (s *Service) ListCareAlertsForAdmin(ctx context.Context, userID string, limit int32) ([]AdminCareAlertListItem, error) {
+	return s.store.ListCareAlertsForAdmin(ctx, userID, limit)
+}
+
+func (s *Service) InsertBillingRefundNote(ctx context.Context, billingTransactionID, adminUserID, note string) error {
+	return s.store.InsertBillingRefundNote(ctx, billingTransactionID, adminUserID, note)
 }
 
 func (s *Service) IsAdmin(ctx context.Context, userID string) (bool, error) {

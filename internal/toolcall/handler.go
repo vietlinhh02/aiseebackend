@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -21,6 +22,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/internal/volunteer"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -116,6 +118,10 @@ func (h *Handler) dispatch(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
 	switch req.Tool {
+	case "call_family_contact":
+		return h.handleCallFamilyContact(ctx, req)
+	case "call_support_contact":
+		return h.handleCallSupportContact(ctx, req)
 	case "make_voice_call":
 		return h.handleMakeCall(ctx, req, "voice")
 	case "make_video_call":
@@ -124,6 +130,8 @@ func (h *Handler) dispatch(
 		return h.handleSendMessage(ctx, req)
 	case "read_unread_messages":
 		return h.handleReadUnread(ctx, req)
+	case "list_family_contacts":
+		return h.handleListFamilyContacts(ctx, req)
 	case "set_medication_reminder":
 		return h.handleSetMedication(ctx, req)
 	case "list_medication_reminders":
@@ -154,6 +162,8 @@ func (h *Handler) dispatch(
 		return nil, fmt.Errorf("unknown tool: %s", req.Tool)
 	}
 }
+
+const assistantCallAnswerTimeoutSeconds = 30
 
 func (h *Handler) handleMakeCall(
 	ctx context.Context, req ToolCallRequest, callType string,
@@ -190,6 +200,97 @@ func (h *Handler) handleMakeCall(
 	}, nil
 }
 
+func (h *Handler) handleCallFamilyContact(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	contactName := strings.TrimSpace(stringParam(req.Params, "contact_name"))
+	if contactName == "" {
+		return map[string]any{
+			"status":  "invalid_request",
+			"mode":    "family",
+			"message": "contact_name is required",
+		}, nil
+	}
+
+	member, err := h.user.ResolveContact(ctx, req.UserID, contactName)
+	if err != nil {
+		return h.familyResolveError(ctx, req.UserID, contactName, err), nil
+	}
+
+	caller, err := h.user.GetMe(ctx, req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get caller: %w", err)
+	}
+
+	callType := normalizeAssistantCallType(stringParam(req.Params, "call_type"))
+	result, err := h.call.CreateRoom(ctx, caller, member.User, callType)
+	if err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+
+	resp := map[string]any{
+		"status":                 "prepared",
+		"mode":                   "family",
+		"room_name":              result.RoomName,
+		"token":                  result.Token,
+		"call_type":              callType,
+		"contact_id":             pgutil.PgUUIDToString(member.User.ID),
+		"contact_name":           displayNameOrFallback(member.User.DisplayName, contactName),
+		"contact_role":           "family",
+		"relationship":           member.Relationship,
+		"answer_timeout_seconds": assistantCallAnswerTimeoutSeconds,
+	}
+	if fallbackContacts, err := h.familyFallbackContacts(ctx, req.UserID, pgutil.PgUUIDToString(member.User.ID)); err == nil && len(fallbackContacts) > 0 {
+		resp["fallback_contacts"] = fallbackContacts
+	}
+	if member.User.AvatarUrl.Valid {
+		resp["avatar_url"] = member.User.AvatarUrl.String
+	}
+	return resp, nil
+}
+
+func (h *Handler) handleCallSupportContact(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	contactName := strings.TrimSpace(stringParam(req.Params, "contact_name"))
+	if contactName != "" && !isGenericSupportRequest(contactName) {
+		return h.handleCallFamilyContact(ctx, req)
+	}
+
+	callType := normalizeAssistantCallType(stringParam(req.Params, "call_type"))
+	result, err := h.volunteer.StartAssistantMatch(ctx, req.UserID, callType)
+	if err != nil {
+		return nil, fmt.Errorf("start assistant volunteer match: %w", err)
+	}
+
+	resp := map[string]any{
+		"status":    result.Status,
+		"mode":      "volunteer",
+		"call_type": callType,
+	}
+	if result.MatchID != "" {
+		resp["match_id"] = result.MatchID
+	}
+	if result.Message != "" {
+		resp["message"] = result.Message
+	}
+	if result.Status != "matched" {
+		return resp, nil
+	}
+
+	resp["status"] = "prepared"
+	resp["room_name"] = result.RoomName
+	resp["token"] = result.UserToken
+	resp["contact_id"] = result.VolunteerID
+	resp["contact_name"] = displayNameOrFallback(
+		result.VolunteerName,
+		i18n.T(i18n.FromContext(ctx), "toolcall.fallback_helper_name"),
+	)
+	resp["contact_role"] = "volunteer"
+	resp["answer_timeout_seconds"] = assistantCallAnswerTimeoutSeconds
+	return resp, nil
+}
+
 func (h *Handler) handleSendMessage(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
@@ -210,7 +311,7 @@ func (h *Handler) handleSendMessage(
 
 	receiverID := pgutil.PgUUIDToString(member.User.ID)
 	msg, err := h.chat.SendMessage(
-		ctx, req.UserID, receiverID, message, "",
+		ctx, req.UserID, receiverID, message, "", "",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("send message: %w", err)
@@ -271,6 +372,22 @@ func (h *Handler) handleReadUnread(
 		"messages": results,
 		"count":    len(results),
 	}, nil
+}
+
+func (h *Handler) handleListFamilyContacts(
+	ctx context.Context, req ToolCallRequest,
+) (any, error) {
+	uid, err := pgutil.ParsePgUUID(req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user id: %w", err)
+	}
+
+	rows, err := h.queries.GetFamilyMembersOrdered(ctx, uid)
+	if err != nil {
+		return nil, fmt.Errorf("get family members: %w", err)
+	}
+
+	return buildFamilyContactsResponse(rows), nil
 }
 
 func (h *Handler) handleSetMedication(
@@ -580,13 +697,22 @@ func (h *Handler) handleEscalateToFamily(
 		"status": result.Status,
 	}
 	switch result.Status {
-	case "answered":
+	case "prepared":
+		resp["mode"] = "family"
+		resp["call_type"] = "voice"
 		resp["room_name"] = result.RoomName
 		resp["token"] = result.Token
+		resp["contact_id"] = result.ContactID
 		resp["contact_name"] = result.ContactName
-	case "no_answer":
-		resp["tried"] = result.ContactName
-		resp["remaining"] = result.Remaining
+		resp["contact_role"] = "family"
+		resp["relationship"] = result.Relationship
+		resp["answer_timeout_seconds"] = assistantCallAnswerTimeoutSeconds
+		if result.AvatarURL != "" {
+			resp["avatar_url"] = result.AvatarURL
+		}
+		if len(result.Remaining) > 0 {
+			resp["remaining"] = result.Remaining
+		}
 	case "no_contacts":
 		// status only
 	}
@@ -754,6 +880,148 @@ func (h *Handler) handleUpdateLocation(
 		"lat":    lat,
 		"lng":    lng,
 	}, nil
+}
+
+func buildFamilyContactsResponse(
+	rows []dbgen.GetFamilyMembersOrderedRow,
+) map[string]any {
+	contacts := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		displayName := row.DisplayName
+		if displayName == "" {
+			displayName = row.Email
+		}
+		contacts = append(contacts, map[string]any{
+			"id":                 pgutil.PgUUIDToString(row.ID),
+			"display_name":       displayName,
+			"relationship":       row.Relationship,
+			"role":               row.Role,
+			"is_primary_contact": row.IsPrimaryContact,
+		})
+	}
+
+	return map[string]any{
+		"status":          "ok",
+		"has_family_link": len(contacts) > 0,
+		"count":           len(contacts),
+		"contacts":        contacts,
+	}
+}
+
+func stringParam(params map[string]any, key string) string {
+	raw, _ := params[key].(string)
+	return raw
+}
+
+func normalizeAssistantCallType(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "video") {
+		return "video"
+	}
+	return "voice"
+}
+
+func familyResolveError(contactName string, err error) map[string]any {
+	message := err.Error()
+	status := "contact_not_found"
+	switch {
+	case strings.Contains(message, "multiple contacts match"):
+		status = "multiple_contacts"
+	case strings.Contains(message, "contact not found"):
+		status = "contact_not_found"
+	}
+	return map[string]any{
+		"status":                 status,
+		"mode":                   "family",
+		"requested_contact_name": contactName,
+		"message":                message,
+	}
+}
+
+func (h *Handler) familyFallbackContacts(
+	ctx context.Context,
+	userID string,
+	excludeUserID string,
+) ([]map[string]any, error) {
+	uid, err := pgutil.ParsePgUUID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user id: %w", err)
+	}
+
+	rows, err := h.queries.GetFamilyMembersOrdered(ctx, uid)
+	if err != nil {
+		return nil, fmt.Errorf("get family members ordered: %w", err)
+	}
+	return buildFamilyFallbackContacts(rows, excludeUserID), nil
+}
+
+func (h *Handler) familyResolveError(
+	ctx context.Context,
+	userID string,
+	contactName string,
+	err error,
+) map[string]any {
+	resp := familyResolveError(contactName, err)
+	if fallbackContacts, fallbackErr := h.familyFallbackContacts(ctx, userID, ""); fallbackErr == nil && len(fallbackContacts) > 0 {
+		resp["fallback_contacts"] = fallbackContacts
+	}
+	return resp
+}
+
+func displayNameOrFallback(displayName, fallback string) string {
+	if strings.TrimSpace(displayName) != "" {
+		return displayName
+	}
+	return fallback
+}
+
+func isGenericSupportRequest(contactName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(contactName))
+	if normalized == "" {
+		return true
+	}
+	genericTerms := []string{
+		"ho tro",
+		"nguoi ho tro",
+		"nguoi giup",
+		"nguoi tro giup",
+		"tinh nguyen vien",
+		"volunteer",
+		"support",
+	}
+	for _, term := range genericTerms {
+		if strings.Contains(normalized, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildFamilyFallbackContacts(
+	rows []dbgen.GetFamilyMembersOrderedRow,
+	excludeUserID string,
+) []map[string]any {
+	fallback := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		id := pgutil.PgUUIDToString(row.ID)
+		if excludeUserID != "" && id == excludeUserID {
+			continue
+		}
+		entry := map[string]any{
+			"id":                 id,
+			"display_name":       displayNameOrFallback(row.DisplayName, row.Email),
+			"role":               row.Role,
+			"relationship":       row.Relationship,
+			"is_primary_contact": row.IsPrimaryContact,
+		}
+		if row.AvatarUrl.Valid {
+			entry["avatar_url"] = row.AvatarUrl.String
+		}
+		fallback = append(fallback, entry)
+		if len(fallback) >= 3 {
+			break
+		}
+	}
+	return fallback
 }
 
 func (h *Handler) logAudit(

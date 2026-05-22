@@ -1,0 +1,20 @@
+{
+  "notif.emergency.title": "SOS - %s",
+  "notif.emergency.body": "Urgent help needed!",
+  "notif.medication.title": "Medication reminder",
+  "notif.medication.body": "Time to take %s (%s)",
+  "notif.call_ended.body": "Call ended",
+  "notif.volunteer.body": "A user with visual impairment needs help!",
+  "billing.no_active_group_subscription": "Join or select a care group before managing your plan",
+  "billing.no_active_group_entitlements": "Join or select a care group before viewing plan entitlements",
+  "billing.no_active_group_quota": "Join or select a care group before viewing quota",
+  "billing.instructions.no_paid_plan": "No paid plan yet. Please upgrade from a family member's app.",
+  "billing.instructions.google_play": "Manage or cancel your plan in Google Play.",
+  "billing.instructions.app_store": "Manage or cancel your plan in the App Store.",
+  "billing.instructions.store_managed": "This plan is managed by the store where it was purchased.",
+  "care.coach.fallback_recent": "Based on recent events, monitor closely and contact a doctor if anything looks unusual.",
+  "care.coach.timeline_intro": "Timeline items relevant to your question (or the most recent ones if nothing matches):\n",
+  "care.coach.timeline_outro": "\n\nThis is a supportive summary and does not replace medical advice.",
+  "care.coach.disclaimer": "This information is supportive in nature and not a medical diagnosis.",
+  "toolcall.fallback_helper_name": "Support contact"
+}

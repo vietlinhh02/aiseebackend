@@ -20,15 +20,17 @@ const (
 )
 
 type UsageRecordInput struct {
-	UserID    string         `json:"user_id"`
-	UsageType UsageType      `json:"usage_type"`
-	Quantity  float64        `json:"quantity"`
-	Unit      string         `json:"unit"`
-	Source    string         `json:"source"`
-	SourceID  string         `json:"source_id"`
-	StartedAt *time.Time     `json:"started_at,omitempty"`
-	EndedAt   *time.Time     `json:"ended_at,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	UserID      string         `json:"user_id"`
+	CareGroupID string         `json:"care_group_id,omitempty"`
+	CaredUserID string         `json:"cared_user_id,omitempty"`
+	UsageType   UsageType      `json:"usage_type"`
+	Quantity    float64        `json:"quantity"`
+	Unit        string         `json:"unit"`
+	Source      string         `json:"source"`
+	SourceID    string         `json:"source_id"`
+	StartedAt   *time.Time     `json:"started_at,omitempty"`
+	EndedAt     *time.Time     `json:"ended_at,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
 type UsageRecord struct {
@@ -47,6 +49,8 @@ type UsageRecord struct {
 
 type AICostEventInput struct {
 	UserID             string         `json:"user_id"`
+	CareGroupID        string         `json:"care_group_id,omitempty"`
+	CaredUserID        string         `json:"cared_user_id,omitempty"`
 	UsageLedgerID      string         `json:"usage_ledger_id,omitempty"`
 	SessionID          string         `json:"session_id,omitempty"`
 	Provider           string         `json:"provider"`
@@ -96,9 +100,11 @@ type AICostEvent struct {
 }
 
 type QuotaCheckInput struct {
-	UserID    string    `json:"user_id"`
-	UsageType UsageType `json:"usage_type"`
-	Quantity  float64   `json:"quantity"`
+	UserID      string    `json:"user_id"`
+	CareGroupID string    `json:"care_group_id,omitempty"`
+	CaredUserID string    `json:"cared_user_id,omitempty"`
+	UsageType   UsageType `json:"usage_type"`
+	Quantity    float64   `json:"quantity"`
 }
 
 type QuotaDecision struct {
@@ -127,6 +133,8 @@ func (e *QuotaExceededError) Error() string {
 
 type UsageSessionInput struct {
 	UserID           string         `json:"user_id"`
+	CareGroupID      string         `json:"care_group_id,omitempty"`
+	CaredUserID      string         `json:"cared_user_id,omitempty"`
 	UsageType        UsageType      `json:"usage_type"`
 	ReservedQuantity float64        `json:"reserved_quantity,omitempty"`
 	Unit             string         `json:"unit"`
@@ -153,19 +161,23 @@ type UsageSession struct {
 }
 
 type CommitUsageSessionInput struct {
-	UserID    string         `json:"user_id"`
-	UsageType UsageType      `json:"usage_type"`
-	Quantity  float64        `json:"quantity,omitempty"`
-	Unit      string         `json:"unit"`
-	Source    string         `json:"source"`
-	SourceID  string         `json:"source_id"`
-	StartedAt time.Time      `json:"started_at"`
-	EndedAt   time.Time      `json:"ended_at"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	UserID      string         `json:"user_id"`
+	CareGroupID string         `json:"care_group_id,omitempty"`
+	CaredUserID string         `json:"cared_user_id,omitempty"`
+	UsageType   UsageType      `json:"usage_type"`
+	Quantity    float64        `json:"quantity,omitempty"`
+	Unit        string         `json:"unit"`
+	Source      string         `json:"source"`
+	SourceID    string         `json:"source_id"`
+	StartedAt   time.Time      `json:"started_at"`
+	EndedAt     time.Time      `json:"ended_at"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
 type UsageGrantInput struct {
 	UserID      string         `json:"user_id"`
+	CareGroupID string         `json:"care_group_id,omitempty"`
+	CaredUserID string         `json:"cared_user_id,omitempty"`
 	UsageType   UsageType      `json:"usage_type"`
 	Quantity    float64        `json:"quantity"`
 	Unit        string         `json:"unit"`
@@ -219,13 +231,14 @@ type UsageResponse struct {
 }
 
 type CareGroupSummary struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	OwnerUserID      string `json:"owner_user_id,omitempty"`
-	CurrentUserRole  string `json:"current_user_role"`
-	CanManageBilling bool   `json:"can_manage_billing"`
-	CaredUserCount   int    `json:"cared_user_count"`
-	MemberCount      int    `json:"member_count"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	OwnerUserID      string    `json:"owner_user_id,omitempty"`
+	CurrentUserRole  string    `json:"current_user_role"`
+	CanManageBilling bool      `json:"can_manage_billing"`
+	CaredUserCount   int       `json:"cared_user_count"`
+	MemberCount      int       `json:"member_count"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
 }
 
 type Plan struct {
@@ -373,6 +386,12 @@ type BillingOverviewResponse struct {
 	Events          []SubscriptionEvent         `json:"events"`
 	StoreManagement StoreManagementInfo         `json:"store_management"`
 	AsOf            time.Time                   `json:"as_of"`
+}
+
+type BillingOverviewInput struct {
+	UserID      string
+	CareGroupID string
+	CaredUserID string
 }
 
 func summarizePlan(plan Plan) PlanSummary {

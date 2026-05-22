@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const revenueCatProvider = "revenuecat"
@@ -24,11 +26,15 @@ type RevenueCatEvent struct {
 	ID                    string                                   `json:"id"`
 	Type                  string                                   `json:"type"`
 	AppUserID             string                                   `json:"app_user_id"`
+	OriginalAppUserID     string                                   `json:"original_app_user_id"`
+	Aliases               []string                                 `json:"aliases"`
 	ProductID             string                                   `json:"product_id"`
 	EntitlementIDs        []string                                 `json:"entitlement_ids"`
 	Store                 string                                   `json:"store"`
 	TransactionID         string                                   `json:"transaction_id"`
 	OriginalTransactionID string                                   `json:"original_transaction_id"`
+	CancelReason          string                                   `json:"cancel_reason"`
+	ExpirationReason      string                                   `json:"expiration_reason"`
 	EventTimestampMS      int64                                    `json:"event_timestamp_ms"`
 	PurchasedAtMS         int64                                    `json:"purchased_at_ms"`
 	ExpirationAtMS        *int64                                   `json:"expiration_at_ms"`
@@ -66,7 +72,16 @@ func (cfg RevenueCatConfig) PlanCodeForProduct(productID string) string {
 	case "aisee_premium_599k_monthly", "premium_599k_monthly", "premium_599k", "care_premium_599k", "care_premium":
 		return "premium_599k"
 	default:
-		return ""
+		switch {
+		case strings.Contains(normalized, "basic"), strings.Contains(normalized, "149k"), strings.Contains(normalized, "149000"):
+			return "basic_149k"
+		case strings.Contains(normalized, "plus"), strings.Contains(normalized, "399k"), strings.Contains(normalized, "399000"):
+			return "plus_399k"
+		case strings.Contains(normalized, "premium"), strings.Contains(normalized, "599k"), strings.Contains(normalized, "599000"), strings.Contains(normalized, "pro"):
+			return "premium_599k"
+		default:
+			return ""
+		}
 	}
 }
 
@@ -86,11 +101,13 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 	if strings.TrimSpace(event.ID) == "" {
 		return RevenueCatSyncResult{}, fmt.Errorf("revenuecat event id is required")
 	}
-	if strings.TrimSpace(event.AppUserID) == "" {
-		return RevenueCatSyncResult{}, fmt.Errorf("revenuecat app_user_id is required")
+	userID := revenueCatCanonicalUserID(event)
+	if userID == "" {
+		return RevenueCatSyncResult{}, fmt.Errorf("revenuecat app user id is required")
 	}
 
 	provider := revenueCatProviderName(event.Store)
+	providerSubscriptionID := revenueCatProviderSubscriptionID(event)
 	occurredAt := revenueCatTime(event.EventTimestampMS, time.Now().UTC())
 	result := RevenueCatSyncResult{Ignored: revenueCatEventDoesNotChangeSubscription(event.Type)}
 	var sub *Subscription
@@ -98,9 +115,18 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 	var careGroupID string
 	var planCode string
 	sanitizedPayload := sanitizedRevenueCatPayload(payload)
+	existingSub, err := s.store.SubscriptionByProviderRef(
+		ctx, provider, providerSubscriptionID,
+	)
+	if err != nil {
+		return RevenueCatSyncResult{}, fmt.Errorf("revenuecat provider subscription lookup: %w", err)
+	}
 
 	if !result.Ignored {
 		planCode = cfg.PlanCodeForProduct(event.ProductID)
+		if planCode == "" && existingSub != nil {
+			planCode = existingSub.PlanCode
+		}
 		if planCode == "" {
 			return RevenueCatSyncResult{}, fmt.Errorf(
 				"unmapped revenuecat product_id: %s", event.ProductID,
@@ -112,8 +138,11 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 		}
 		plan = &resolvedPlan
 		careGroupID = revenueCatCareGroupID(event)
+		if careGroupID == "" && existingSub != nil {
+			careGroupID = existingSub.CareGroupID
+		}
 		if careGroupID == "" {
-			group, err := s.store.DefaultCareGroup(ctx, event.AppUserID)
+			group, err := s.store.ActiveCareGroup(ctx, userID)
 			if err != nil {
 				return RevenueCatSyncResult{}, fmt.Errorf("revenuecat care group: %w", err)
 			}
@@ -133,21 +162,14 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 		} else {
 			start := revenueCatOptionalTime(event.PurchasedAtMS)
 			end := revenueCatOptionalTimePtr(event.ExpirationAtMS)
-			providerSubscriptionID := event.OriginalTransactionID
-			if strings.TrimSpace(providerSubscriptionID) == "" {
-				providerSubscriptionID = event.TransactionID
-			}
-			if strings.TrimSpace(providerSubscriptionID) == "" {
-				providerSubscriptionID = event.ID
-			}
 			next, err := s.store.UpsertProviderSubscription(ctx, ProviderSubscriptionInput{
-				UserID:                 event.AppUserID,
+				UserID:                 userID,
 				CareGroupID:            careGroupID,
 				PlanID:                 plan.ID,
-				Status:                 revenueCatSubscriptionStatus(event.Type),
+				Status:                 revenueCatSubscriptionStatus(event),
 				CurrentPeriodStart:     start,
 				CurrentPeriodEnd:       end,
-				CancelAtPeriodEnd:      revenueCatCancelAtPeriodEnd(event.Type),
+				CancelAtPeriodEnd:      revenueCatCancelAtPeriodEnd(event),
 				Provider:               provider,
 				ProviderSubscriptionID: providerSubscriptionID,
 				Metadata: map[string]any{
@@ -169,7 +191,7 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 	}
 
 	transactionInput := BillingTransactionInput{
-		UserID:          event.AppUserID,
+		UserID:          userID,
 		Provider:        provider,
 		ProviderEventID: event.ID,
 		Status:          revenueCatTransactionStatus(event.Type),
@@ -203,7 +225,7 @@ func (s *Service) SyncRevenueCatWebhookWithConfig(
 		EventType:       "revenuecat_" + strings.ToLower(event.Type),
 		Provider:        provider,
 		ProviderEventID: event.ID,
-		UserID:          event.AppUserID,
+		UserID:          userID,
 		OccurredAt:      occurredAt,
 		Payload:         sanitizedPayload,
 	}
@@ -255,21 +277,29 @@ func revenueCatProviderName(store string) string {
 	}
 }
 
-func revenueCatSubscriptionStatus(eventType string) string {
-	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+func revenueCatSubscriptionStatus(event RevenueCatEvent) string {
+	switch strings.ToUpper(strings.TrimSpace(event.Type)) {
 	case "EXPIRATION", "SUBSCRIPTION_PAUSED":
 		return "expired"
 	case "BILLING_ISSUE":
 		return "past_due"
+	case "REFUND":
+		return "expired"
 	case "CANCELLATION":
+		if strings.EqualFold(strings.TrimSpace(event.CancelReason), "CUSTOMER_SUPPORT") {
+			return "active"
+		}
 		return "active"
 	default:
 		return "active"
 	}
 }
 
-func revenueCatCancelAtPeriodEnd(eventType string) bool {
-	return strings.ToUpper(strings.TrimSpace(eventType)) == "CANCELLATION"
+func revenueCatCancelAtPeriodEnd(event RevenueCatEvent) bool {
+	if strings.ToUpper(strings.TrimSpace(event.Type)) != "CANCELLATION" {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(event.CancelReason), "CUSTOMER_SUPPORT")
 }
 
 func revenueCatEventDoesNotChangeSubscription(eventType string) bool {
@@ -322,6 +352,57 @@ func revenueCatCareGroupID(event RevenueCatEvent) string {
 		attr, ok := event.SubscriberAttributes[key]
 		if ok && strings.TrimSpace(attr.Value) != "" {
 			return strings.TrimSpace(attr.Value)
+		}
+	}
+	return ""
+}
+
+func revenueCatCanonicalUserID(event RevenueCatEvent) string {
+	for _, candidate := range []string{
+		revenueCatSubscriberAttributeValue(event, "aisee_user_id"),
+		event.AppUserID,
+		event.OriginalAppUserID,
+	} {
+		if parsed := revenueCatValidUserID(candidate); parsed != "" {
+			return parsed
+		}
+	}
+	for _, alias := range event.Aliases {
+		if parsed := revenueCatValidUserID(alias); parsed != "" {
+			return parsed
+		}
+	}
+	return revenueCatValidUserID(revenueCatSubscriberAttributeValue(event, "app_user_id"))
+}
+
+func revenueCatValidUserID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if _, err := uuid.Parse(raw); err != nil {
+		return ""
+	}
+	return raw
+}
+
+func revenueCatSubscriberAttributeValue(event RevenueCatEvent, key string) string {
+	attr, ok := event.SubscriberAttributes[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(attr.Value)
+}
+
+func revenueCatProviderSubscriptionID(event RevenueCatEvent) string {
+	for _, candidate := range []string{
+		event.OriginalTransactionID,
+		event.TransactionID,
+		event.ID,
+	} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate != "" {
+			return candidate
 		}
 	}
 	return ""

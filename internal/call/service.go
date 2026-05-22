@@ -11,6 +11,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/push"
@@ -48,12 +49,15 @@ func NewService(
 }
 
 type activeCall struct {
-	CallerID     string
-	CalleeID     string
-	CallType     string
-	StartedAt    time.Time
-	CallerTokens push.UserTokens
-	CalleeTokens push.UserTokens
+	CallerID       string
+	CalleeID       string
+	BilledUserID   string
+	CallType       string
+	StartedAt      time.Time
+	CallerTokens   push.UserTokens
+	CalleeTokens   push.UserTokens
+	CallerSettings []byte
+	CalleeSettings []byte
 }
 
 func (s *Service) GetUserToken(
@@ -123,17 +127,8 @@ func (s *Service) CreateRoom(
 	callerID := pgutil.PgUUIDToString(caller.ID)
 	callerName := caller.DisplayName
 	calleeIDStr := pgutil.PgUUIDToString(callee.ID)
+	billedUserID := billedCallUserID(callerID, caller.Role, calleeIDStr, callee.Role)
 	startedAt := time.Now().UTC()
-
-	if s.billing != nil && callType == "video" {
-		if err := s.billing.RequireQuota(ctx, billing.QuotaCheckInput{
-			UserID:    callerID,
-			UsageType: billing.UsageVideoCalls,
-			Quantity:  1,
-		}); err != nil {
-			return CreateRoomResult{}, err
-		}
-	}
 
 	if err := s.lk.CreateRoom(ctx, roomName); err != nil {
 		return CreateRoomResult{}, err
@@ -156,31 +151,16 @@ func (s *Service) CreateRoom(
 	}
 
 	if s.billing != nil {
-		if callType == "video" {
-			if _, err := s.billing.RecordUsage(ctx, billing.UsageRecordInput{
-				UserID:    callerID,
-				UsageType: billing.UsageVideoCalls,
-				Quantity:  1,
-				Unit:      "calls",
-				Source:    "call",
-				SourceID:  roomName,
-				StartedAt: &startedAt,
-				Metadata: map[string]any{
-					"callee_id": calleeIDStr,
-					"call_type": callType,
-				},
-			}); err != nil {
-				return CreateRoomResult{}, fmt.Errorf("record video call usage: %w", err)
-			}
-		}
 		if _, err := s.billing.StartUsageSession(ctx, billing.UsageSessionInput{
-			UserID:    callerID,
-			UsageType: callMinutesUsageType(callType),
-			Unit:      "minutes",
-			Source:    "call_duration",
-			SourceID:  roomName,
-			StartedAt: startedAt,
+			UserID:      billedUserID,
+			CaredUserID: billedUserID,
+			UsageType:   callMinutesUsageType(callType),
+			Unit:        "minutes",
+			Source:      "call_duration",
+			SourceID:    roomName,
+			StartedAt:   startedAt,
 			Metadata: map[string]any{
+				"caller_id": callerID,
 				"callee_id": calleeIDStr,
 				"call_type": callType,
 			},
@@ -213,10 +193,11 @@ func (s *Service) CreateRoom(
 	})
 
 	s.rememberActiveCall(roomName, activeCall{
-		CallerID:  callerID,
-		CalleeID:  calleeIDStr,
-		CallType:  callType,
-		StartedAt: startedAt,
+		CallerID:     callerID,
+		CalleeID:     calleeIDStr,
+		BilledUserID: billedUserID,
+		CallType:     callType,
+		StartedAt:    startedAt,
 		CallerTokens: push.UserTokens{
 			FcmToken:      caller.FcmToken,
 			ApnsToken:     caller.ApnsToken,
@@ -227,6 +208,8 @@ func (s *Service) CreateRoom(
 			ApnsToken:     callee.ApnsToken,
 			ApnsVoipToken: callee.ApnsVoipToken,
 		},
+		CallerSettings: caller.Settings,
+		CalleeSettings: callee.Settings,
 	})
 	if s.hub.IsOnline(calleeIDStr) {
 		s.hub.SendToUser(calleeIDStr, chat.WSMessage{
@@ -238,6 +221,17 @@ func (s *Service) CreateRoom(
 	return CreateRoomResult{
 		RoomName: roomName, Token: callerToken,
 	}, nil
+}
+
+func billedCallUserID(callerID, callerRole, calleeID, calleeRole string) string {
+	switch {
+	case callerRole == "user" && calleeRole == "family":
+		return callerID
+	case callerRole == "family" && calleeRole == "user":
+		return calleeID
+	default:
+		return callerID
+	}
 }
 
 func (s *Service) EndRoom(
@@ -265,14 +259,16 @@ func (s *Service) commitCallUsage(
 	if _, err := s.billing.CommitUsageSession(
 		ctx,
 		billing.CommitUsageSessionInput{
-			UserID:    call.CallerID,
-			UsageType: callMinutesUsageType(call.CallType),
-			Unit:      "minutes",
-			Source:    "call_duration",
-			SourceID:  roomName,
-			StartedAt: call.StartedAt,
-			EndedAt:   endedAt,
+			UserID:      call.BilledUserID,
+			CaredUserID: call.BilledUserID,
+			UsageType:   callMinutesUsageType(call.CallType),
+			Unit:        "minutes",
+			Source:      "call_duration",
+			SourceID:    roomName,
+			StartedAt:   call.StartedAt,
+			EndedAt:     endedAt,
 			Metadata: map[string]any{
+				"caller_id": call.CallerID,
 				"callee_id": call.CalleeID,
 				"call_type": call.CallType,
 			},
@@ -336,12 +332,15 @@ func (s *Service) notifyCallEnded(
 		return
 	}
 	tokens := call.CalleeTokens
+	settings := call.CalleeSettings
 	if recipientID == call.CallerID {
 		tokens = call.CallerTokens
+		settings = call.CallerSettings
 	}
+	lang := i18n.FromUserSettings(settings)
 	s.pusher.Send(ctx, tokens, push.Notification{
 		Title: "AiSee",
-		Body:  "Cuộc gọi đã kết thúc",
+		Body:  i18n.T(lang, "notif.call_ended.body"),
 		Type:  "voip",
 		Data:  payload,
 	})

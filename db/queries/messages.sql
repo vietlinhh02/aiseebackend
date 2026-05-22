@@ -1,6 +1,6 @@
 -- name: CreateMessage :one
-INSERT INTO messages (sender_id, receiver_id, content_text, voice_url)
-VALUES ($1, $2, $3, $4)
+INSERT INTO messages (sender_id, receiver_id, content_text, voice_url, image_url)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetMessagesByContact :many

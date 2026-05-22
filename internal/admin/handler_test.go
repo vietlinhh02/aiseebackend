@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/team-dang/aiseebackend/internal/billing"
 )
 
 type fakeAdminHandlerService struct {
@@ -158,6 +159,26 @@ func (f *fakeAdminHandlerService) ListUserBillingTransactions(
 	f.userPage = page
 	f.userLimit = limit
 	return f.userResult, f.userErr
+}
+
+func (f *fakeAdminHandlerService) ListIncidentsForAdmin(context.Context, string, int32) ([]AdminIncidentListItem, error) {
+	return nil, nil
+}
+
+func (f *fakeAdminHandlerService) ListCareAlertsForAdmin(context.Context, string, int32) ([]AdminCareAlertListItem, error) {
+	return nil, nil
+}
+
+func (f *fakeAdminHandlerService) InsertBillingRefundNote(context.Context, string, string, string) error {
+	return nil
+}
+
+func (f *fakeAdminHandlerService) ManualGrantUsage(
+	_ context.Context,
+	_, _ string,
+	_ ManualGrantInput,
+) (billing.UsageGrant, error) {
+	return billing.UsageGrant{ID: "stub-grant"}, nil
 }
 
 func (f *fakeAdminHandlerService) IsAdmin(context.Context, string) (bool, error) {

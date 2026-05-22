@@ -18,7 +18,7 @@ type Client struct {
 	host      string
 	roomSvc   *lksdk.RoomServiceClient
 	dispSvc   *lksdk.AgentDispatchClient
-	
+
 	dispatches sync.Map
 }
 

@@ -1,0 +1,20 @@
+{
+  "notif.emergency.title": "SOS - %s",
+  "notif.emergency.body": "Cần giúp đỡ khẩn cấp!",
+  "notif.medication.title": "Nhắc uống thuốc",
+  "notif.medication.body": "Đã đến giờ uống %s (%s)",
+  "notif.call_ended.body": "Cuộc gọi đã kết thúc",
+  "notif.volunteer.body": "Cần giúp đỡ từ người khiếm thị!",
+  "billing.no_active_group_subscription": "Hãy tham gia hoặc chọn một nhóm chăm sóc trước khi quản lý gói",
+  "billing.no_active_group_entitlements": "Hãy tham gia hoặc chọn một nhóm chăm sóc trước khi xem quyền gói",
+  "billing.no_active_group_quota": "Hãy tham gia hoặc chọn một nhóm chăm sóc trước khi xem quota",
+  "billing.instructions.no_paid_plan": "Chưa có gói trả phí. Hãy nâng gói từ ứng dụng của người thân.",
+  "billing.instructions.google_play": "Quản lý hoặc hủy gói trong Google Play.",
+  "billing.instructions.app_store": "Quản lý hoặc hủy gói trong App Store.",
+  "billing.instructions.store_managed": "Gói này được quản lý bởi cửa hàng đã thanh toán.",
+  "care.coach.fallback_recent": "Dựa trên các sự kiện gần đây, hãy theo dõi sát và liên hệ bác sĩ nếu có dấu hiệu bất thường.",
+  "care.coach.timeline_intro": "Các mục timeline liên quan từ khóa trong câu hỏi (hoặc gần nhất nếu không khớp):\n",
+  "care.coach.timeline_outro": "\n\nĐây là tóm tắt tham khảo, không thay thế tư vấn y khoa.",
+  "care.coach.disclaimer": "Thông tin chỉ mang tính chăm sóc hỗ trợ, không phải chẩn đoán y tế.",
+  "toolcall.fallback_helper_name": "Người hỗ trợ"
+}

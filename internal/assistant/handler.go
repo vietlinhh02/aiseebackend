@@ -34,6 +34,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	descriptor, err := h.service.CreateSession(
+		r.Context(),
 		userID,
 		middleware.RoleFromContext(r.Context()),
 		websocketURLFromRequest(r, "/api/v1/ai/ws"),

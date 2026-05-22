@@ -368,7 +368,7 @@ func newTestRouterWithBridge(secret string, bridge Bridge) http.Handler {
 	r := chi.NewRouter()
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(secret, nil))
+			r.Use(middleware.Auth(secret, nil, nil))
 			r.Post("/ai/session", handler.CreateSession)
 		})
 		r.Get("/ai/ws", handler.WebSocket)

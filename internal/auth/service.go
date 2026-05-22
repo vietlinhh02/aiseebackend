@@ -103,25 +103,42 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 		return nil, fmt.Errorf("not a refresh token")
 	}
 
-	// Check if refresh token is blacklisted (rotation)
+	// Atomically check and invalidate the old refresh token (rotation)
 	jti, _ := claims["jti"].(string)
-	if s.rdb != nil && s.rdb.Get(ctx, "revoked:"+jti).Val() != "" {
-		return nil, fmt.Errorf("token revoked")
+	if exp, ok := claims["exp"].(float64); ok {
+		ttl := time.Until(time.Unix(int64(exp), 0))
+		if ttl > 0 && s.rdb != nil {
+			ok, err := s.rdb.SetNX(ctx, "revoked:"+jti, "1", ttl).Result()
+			if err != nil {
+				return nil, fmt.Errorf("redis error: %w", err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("token revoked")
+			}
+		}
 	}
 
 	sub, _ := claims["sub"].(string)
 	role, _ := claims["role"].(string)
+	var dbErr error
+	role, dbErr = s.currentBaseRole(ctx, sub, role)
+	if dbErr != nil {
+		return nil, fmt.Errorf("failed to refresh role: %w", dbErr)
+	}
 	effectiveRole := s.resolveEffectiveRole(ctx, sub, role)
 
-	// Invalidate the old refresh token (rotation)
-	if exp, ok := claims["exp"].(float64); ok {
-		ttl := time.Until(time.Unix(int64(exp), 0))
-		if ttl > 0 && s.rdb != nil {
-			s.rdb.Set(ctx, "revoked:"+jti, "1", ttl)
-		}
-	}
-
 	return s.generateTokenPair(sub, effectiveRole)
+}
+
+func (s *Service) currentBaseRole(ctx context.Context, userID, fallback string) (string, error) {
+	if s.db == nil {
+		return fallback, nil
+	}
+	var role string
+	if err := s.db.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&role); err != nil {
+		return "", err
+	}
+	return role, nil
 }
 
 func (s *Service) cacheUserStatus(ctx context.Context, userID, role string) {

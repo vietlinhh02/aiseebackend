@@ -11,7 +11,10 @@ type fakeStore struct {
 	plans                    []Plan
 	entitlements             map[string][]Entitlement
 	subscription             *Subscription
+	activeCareGroupSubs      []Subscription
+	providerRefSubscription  *Subscription
 	careGroup                CareGroupSummary
+	careGroupInput           BillingOverviewInput
 	caredUserIDs             []string
 	events                   []SubscriptionEvent
 	records                  []UsageRecordInput
@@ -50,6 +53,14 @@ func (f *fakeStore) CurrentSubscription(
 	return f.subscription, nil
 }
 
+func (f *fakeStore) SubscriptionByProviderRef(
+	_ context.Context,
+	_ string,
+	_ string,
+) (*Subscription, error) {
+	return f.providerRefSubscription, nil
+}
+
 func (f *fakeStore) DefaultCareGroup(
 	_ context.Context,
 	userID string,
@@ -68,11 +79,42 @@ func (f *fakeStore) DefaultCareGroup(
 	}, nil
 }
 
+func (f *fakeStore) ActiveCareGroup(
+	_ context.Context,
+	userID string,
+) (CareGroupSummary, error) {
+	if f.careGroup.ID != "" {
+		return f.careGroup, nil
+	}
+	return CareGroupSummary{}, ErrNoBillingCareGroup
+}
+
+func (f *fakeStore) CareGroupForBilling(
+	ctx context.Context,
+	input BillingOverviewInput,
+) (CareGroupSummary, error) {
+	f.careGroupInput = input
+	if f.careGroup.ID != "" {
+		return f.careGroup, nil
+	}
+	if input.CareGroupID == "" && input.CaredUserID == "" {
+		return f.DefaultCareGroup(ctx, input.UserID)
+	}
+	return CareGroupSummary{}, ErrNoBillingCareGroup
+}
+
 func (f *fakeStore) CurrentSubscriptionForCareGroup(
 	_ context.Context,
 	_ string,
 ) (*Subscription, error) {
 	return f.subscription, nil
+}
+
+func (f *fakeStore) ActiveSubscriptionsForCareGroup(
+	_ context.Context,
+	_ string,
+) ([]Subscription, error) {
+	return append([]Subscription(nil), f.activeCareGroupSubs...), nil
 }
 
 func (f *fakeStore) CaredUserIDsForCareGroup(
@@ -402,28 +444,46 @@ func TestServiceListPlansAttachesEntitlements(t *testing.T) {
 	}
 }
 
-func TestServiceCurrentEntitlementsFallsBackToDefaultPlan(
+func TestServiceCurrentEntitlementsUsesTrialPlanForNewUnsubscribedCareGroup(
 	t *testing.T,
 ) {
 	store := &fakeStore{
 		plans: []Plan{
 			{
-				ID:            "plan-basic",
-				Code:          "basic_149k",
-				Name:          "Care Basic",
-				PriceVND:      149000,
+				ID:            "plan-free",
+				Code:          "free",
+				Name:          "Free / Essential",
+				PriceVND:      0,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-plus",
+				Code:          "plus_399k",
+				Name:          "Care Plus",
+				PriceVND:      399000,
 				BillingPeriod: "month",
 				Status:        "active",
 			},
 		},
 		entitlements: map[string][]Entitlement{
-			"plan-basic": {
+			"plan-plus": {
 				{
 					FeatureKey: "family_members_limit",
-					LimitValue: float64(2),
+					LimitValue: float64(5),
 					LimitUnit:  "members",
 				},
 			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh trial",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   1,
+			MemberCount:      2,
+			CreatedAt:        time.Now().UTC().AddDate(0, 0, -7),
 		},
 	}
 
@@ -434,12 +494,151 @@ func TestServiceCurrentEntitlementsFallsBackToDefaultPlan(
 	if err != nil {
 		t.Fatalf("CurrentEntitlements() error: %v", err)
 	}
-	if resp.Plan.Code != "basic_149k" {
-		t.Fatalf("want fallback basic plan, got %q", resp.Plan.Code)
+	if resp.Plan.Code != "plus_399k" {
+		t.Fatalf("want trial plus plan, got %q", resp.Plan.Code)
+	}
+	if resp.Plan.Name != "Trial 1 tháng" {
+		t.Fatalf("want trial name, got %q", resp.Plan.Name)
 	}
 	limit := resp.Entitlements["family_members_limit"]
-	if limit.LimitValue != float64(2) {
+	if limit.LimitValue != float64(5) {
 		t.Fatalf("unexpected family limit: %+v", limit)
+	}
+}
+
+func TestServiceCurrentBillingOverviewUsesTrialPlanForNewUnsubscribedCareGroup(
+	t *testing.T,
+) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-free",
+				Code:          "free",
+				Name:          "Free / Essential",
+				PriceVND:      0,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-plus",
+				Code:          "plus_399k",
+				Name:          "Care Plus",
+				PriceVND:      399000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-plus": {
+				{
+					FeatureKey:  "ai_minutes_per_month",
+					LimitValue:  float64(600),
+					LimitUnit:   "minutes",
+					ResetPeriod: "month",
+				},
+			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh test",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   1,
+			MemberCount:      2,
+			CreatedAt:        time.Now().UTC().AddDate(0, 0, -7),
+		},
+		caredUserIDs: []string{"user-1"},
+	}
+
+	resp, err := NewService(store).CurrentBillingOverview(
+		context.Background(),
+		BillingOverviewInput{UserID: "family-1"},
+	)
+	if err != nil {
+		t.Fatalf("CurrentBillingOverview() error: %v", err)
+	}
+	if resp.Subscription == nil {
+		t.Fatal("expected synthetic trial subscription, got nil")
+	}
+	if resp.Subscription.Status != "trialing" {
+		t.Fatalf("want trialing subscription, got %+v", resp.Subscription)
+	}
+	if resp.Subscription.CurrentPeriodEnd == nil {
+		t.Fatalf("expected trial period end, got %+v", resp.Subscription)
+	}
+	if resp.EffectivePlan.Code != "plus_399k" {
+		t.Fatalf("want trial plus plan, got %q", resp.EffectivePlan.Code)
+	}
+	if resp.EffectivePlan.Name != "Trial 1 tháng" {
+		t.Fatalf("want trial name, got %q", resp.EffectivePlan.Name)
+	}
+	quota := resp.Usage.Quotas[UsageAIMinutes]
+	if quota.Limit != 600 {
+		t.Fatalf("unexpected AI minutes quota: %+v", quota)
+	}
+}
+
+func TestServiceCurrentBillingOverviewFallsBackToFreeAfterTrialEnds(
+	t *testing.T,
+) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-free",
+				Code:          "free",
+				Name:          "Free / Essential",
+				PriceVND:      0,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-plus",
+				Code:          "plus_399k",
+				Name:          "Care Plus",
+				PriceVND:      399000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-free": {
+				{
+					FeatureKey:  "ai_minutes_per_month",
+					LimitValue:  float64(50),
+					LimitUnit:   "minutes",
+					ResetPeriod: "month",
+				},
+			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh het trial",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   1,
+			MemberCount:      2,
+			CreatedAt:        time.Now().UTC().AddDate(0, -2, 0),
+		},
+		caredUserIDs: []string{"user-1"},
+	}
+
+	resp, err := NewService(store).CurrentBillingOverview(
+		context.Background(),
+		BillingOverviewInput{UserID: "family-1"},
+	)
+	if err != nil {
+		t.Fatalf("CurrentBillingOverview() error: %v", err)
+	}
+	if resp.Subscription != nil {
+		t.Fatalf("expected no subscription after trial expiry, got %+v", resp.Subscription)
+	}
+	if resp.EffectivePlan.Code != "free" {
+		t.Fatalf("want free plan after trial expiry, got %q", resp.EffectivePlan.Code)
+	}
+	if resp.EffectivePlan.Name != "Free / Essential" {
+		t.Fatalf("want free plan name after trial expiry, got %q", resp.EffectivePlan.Name)
 	}
 }
 
@@ -553,7 +752,7 @@ func TestServiceCurrentBillingOverviewUsesCareGroupSubscriptionAndUsage(
 
 	resp, err := NewService(store).CurrentBillingOverview(
 		context.Background(),
-		"family-1",
+		BillingOverviewInput{UserID: "family-1"},
 	)
 	if err != nil {
 		t.Fatalf("CurrentBillingOverview() error: %v", err)
@@ -561,6 +760,9 @@ func TestServiceCurrentBillingOverviewUsesCareGroupSubscriptionAndUsage(
 
 	if resp.CareGroup.ID != "group-1" || !resp.CareGroup.CanManageBilling {
 		t.Fatalf("unexpected care group: %+v", resp.CareGroup)
+	}
+	if store.careGroupInput.UserID != "family-1" {
+		t.Fatalf("unexpected billing input: %+v", store.careGroupInput)
 	}
 	if resp.EffectivePlan.Code != "plus_399k" {
 		t.Fatalf("want plus plan, got %q", resp.EffectivePlan.Code)
@@ -577,6 +779,155 @@ func TestServiceCurrentBillingOverviewUsesCareGroupSubscriptionAndUsage(
 	}
 	if resp.StoreManagement.Provider != "google_play" {
 		t.Fatalf("unexpected store management: %+v", resp.StoreManagement)
+	}
+}
+
+func TestServiceCurrentBillingOverviewAggregatesGroupSubscriptions(t *testing.T) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-free",
+				Code:          "free",
+				Name:          "Free / Essential",
+				PriceVND:      0,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-basic",
+				Code:          "basic_149k",
+				Name:          "Care Basic",
+				PriceVND:      149000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+			{
+				ID:            "plan-plus",
+				Code:          "plus_399k",
+				Name:          "Care Plus",
+				PriceVND:      399000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-basic": {
+				{
+					FeatureKey:  "ai_minutes_per_month",
+					LimitValue:  float64(150),
+					LimitUnit:   "minutes",
+					ResetPeriod: "month",
+				},
+				{
+					FeatureKey:  "camera_activations_per_day",
+					LimitValue:  float64(3),
+					LimitUnit:   "activations",
+					ResetPeriod: "day",
+				},
+				{
+					FeatureKey: "weekly_report_enabled",
+					LimitValue: false,
+				},
+				{
+					FeatureKey: "permission_matrix_level",
+					LimitValue: "none",
+				},
+			},
+			"plan-plus": {
+				{
+					FeatureKey:  "ai_minutes_per_month",
+					LimitValue:  float64(600),
+					LimitUnit:   "minutes",
+					ResetPeriod: "month",
+				},
+				{
+					FeatureKey:  "camera_activations_per_day",
+					LimitValue:  float64(20),
+					LimitUnit:   "activations",
+					ResetPeriod: "day",
+				},
+				{
+					FeatureKey: "weekly_report_enabled",
+					LimitValue: true,
+				},
+				{
+					FeatureKey: "permission_matrix_level",
+					LimitValue: "basic",
+				},
+			},
+		},
+		subscription: &Subscription{
+			ID:          "sub-plus",
+			CareGroupID: "group-1",
+			PlanID:      "plan-plus",
+			PlanCode:    "plus_399k",
+			Status:      "active",
+			Provider:    "google_play",
+		},
+		activeCareGroupSubs: []Subscription{
+			{
+				ID:          "sub-basic",
+				UserID:      "family-2",
+				CareGroupID: "group-1",
+				PlanID:      "plan-basic",
+				PlanCode:    "basic_149k",
+				Status:      "active",
+			},
+			{
+				ID:          "sub-plus",
+				UserID:      "family-1",
+				CareGroupID: "group-1",
+				PlanID:      "plan-plus",
+				PlanCode:    "plus_399k",
+				Status:      "active",
+				Provider:    "google_play",
+			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh me",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   2,
+			MemberCount:      3,
+		},
+		caredUserIDs: []string{"user-1", "user-2"},
+		usageTotals: []UsageTotal{
+			{
+				UsageType: UsageAIMinutes,
+				Quantity:  480,
+				Unit:      "minutes",
+			},
+			{
+				UsageType: UsageCameraActivations,
+				Quantity:  9,
+				Unit:      "activations",
+			},
+		},
+	}
+
+	resp, err := NewService(store).CurrentBillingOverview(
+		context.Background(),
+		BillingOverviewInput{UserID: "family-1"},
+	)
+	if err != nil {
+		t.Fatalf("CurrentBillingOverview() error: %v", err)
+	}
+
+	ai := resp.Usage.Quotas[UsageAIMinutes]
+	if ai.Limit != 750 || ai.Used != 480 || ai.Remaining != 270 {
+		t.Fatalf("unexpected aggregated AI quota: %+v", ai)
+	}
+	camera := resp.Usage.Quotas[UsageCameraActivations]
+	if camera.Limit != 23 || camera.Used != 9 || camera.Remaining != 14 {
+		t.Fatalf("unexpected aggregated camera quota: %+v", camera)
+	}
+	if got := resp.Entitlements["weekly_report_enabled"].LimitValue; got != true {
+		t.Fatalf("weekly report entitlement = %+v, want true", got)
+	}
+	if got := resp.Entitlements["permission_matrix_level"].LimitValue; got != "basic" {
+		t.Fatalf("permission matrix entitlement = %+v, want basic", got)
 	}
 }
 
@@ -868,7 +1219,9 @@ func TestServiceCurrentUsageSummaryCombinesQuotaUsageAndGrants(
 
 	resp, err := NewService(store).CurrentUsage(
 		context.Background(),
-		"00000000-0000-0000-0000-000000000789",
+		BillingOverviewInput{
+			UserID: "00000000-0000-0000-0000-000000000789",
+		},
 	)
 	if err != nil {
 		t.Fatalf("CurrentUsage() error: %v", err)
@@ -966,6 +1319,57 @@ func TestServiceRequireQuotaRejectsDepletedCareGroupQuota(t *testing.T) {
 		quotaErr.PlanCode != "basic_149k" ||
 		quotaErr.ResetPeriod != "day" {
 		t.Fatalf("unexpected quota error: %+v", quotaErr)
+	}
+}
+
+func TestServiceRequireQuotaRejectsCareCoachWithoutPlanEntitlement(t *testing.T) {
+	store := &fakeStore{
+		plans: []Plan{
+			{
+				ID:            "plan-basic",
+				Code:          "basic_149k",
+				Name:          "Care Basic",
+				PriceVND:      149000,
+				BillingPeriod: "month",
+				Status:        "active",
+			},
+		},
+		entitlements: map[string][]Entitlement{
+			"plan-basic": {
+				{
+					FeatureKey:  "video_calls_per_day",
+					LimitValue:  float64(5),
+					LimitUnit:   "calls",
+					ResetPeriod: "day",
+				},
+			},
+		},
+		careGroup: CareGroupSummary{
+			ID:               "group-1",
+			Name:             "Gia dinh me",
+			OwnerUserID:      "family-1",
+			CurrentUserRole:  "owner",
+			CanManageBilling: true,
+			CaredUserCount:   1,
+			MemberCount:      1,
+		},
+		caredUserIDs: []string{
+			"00000000-0000-0000-0000-000000000111",
+		},
+	}
+	err := NewService(store).RequireQuota(
+		context.Background(),
+		QuotaCheckInput{
+			UserID:    "00000000-0000-0000-0000-000000000111",
+			UsageType: UsageCareCoachQuestions,
+			Quantity:  1,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected coach quota to fail when plan omits care_coach_questions_per_month")
+	}
+	if _, ok := err.(*QuotaExceededError); !ok {
+		t.Fatalf("expected QuotaExceededError, got %T: %v", err, err)
 	}
 }
 

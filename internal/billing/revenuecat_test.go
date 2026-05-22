@@ -42,6 +42,36 @@ func TestRevenueCatProductPlanMapParsesOverrides(t *testing.T) {
 	}
 }
 
+func TestRevenueCatProductPlanMapUsesFuzzyFallbacks(t *testing.T) {
+	cfg := RevenueCatConfig{}
+
+	cases := map[string]string{
+		"myapp-basic-monthly":   "basic_149k",
+		"family-plus-399000":    "plus_399k",
+		"household-premium-pro": "premium_599k",
+	}
+	for productID, want := range cases {
+		if got := cfg.PlanCodeForProduct(productID); got != want {
+			t.Fatalf("%s mapped to %q, want %q", productID, got, want)
+		}
+	}
+}
+
+func TestRevenueCatCanonicalUserIDPrefersAiSeeSubscriberAttribute(t *testing.T) {
+	event := RevenueCatEvent{
+		AppUserID:         "$RCAnonymousID:test",
+		OriginalAppUserID: "$RCAnonymousID:orig",
+		Aliases:           []string{"$RCAnonymousID:alias"},
+		SubscriberAttributes: map[string]RevenueCatSubscriberAttribute{
+			"aisee_user_id": {Value: "00000000-0000-0000-0000-000000000789"},
+		},
+	}
+
+	if got := revenueCatCanonicalUserID(event); got != "00000000-0000-0000-0000-000000000789" {
+		t.Fatalf("canonical user id = %q", got)
+	}
+}
+
 func TestSyncRevenueCatWebhookActivatesCareGroupSubscription(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{
@@ -155,6 +185,110 @@ func TestSyncRevenueCatWebhookCancellationKeepsAccessUntilPeriodEnd(t *testing.T
 	}
 }
 
+func TestSyncRevenueCatWebhookSupportCancellationDoesNotSchedulePeriodEndCancel(t *testing.T) {
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	exp := now.Add(7 * 24 * time.Hour)
+	store := revenueCatTestStore()
+	svc := NewService(store)
+
+	result, err := svc.SyncRevenueCatWebhook(context.Background(), RevenueCatWebhookPayload{
+		Event: RevenueCatEvent{
+			ID:                    "evt-support-cancel",
+			Type:                  "CANCELLATION",
+			AppUserID:             "00000000-0000-0000-0000-000000000123",
+			ProductID:             "aisee_premium_599k_monthly",
+			OriginalTransactionID: "orig-support-cancel",
+			Store:                 "APP_STORE",
+			CancelReason:          "CUSTOMER_SUPPORT",
+			EventTimestampMS:      now.UnixMilli(),
+			ExpirationAtMS:        ptrInt64(exp.UnixMilli()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncRevenueCatWebhook() error: %v", err)
+	}
+	if result.Subscription.Status != "active" {
+		t.Fatalf("status = %q", result.Subscription.Status)
+	}
+	if result.Subscription.CancelAtPeriodEnd {
+		t.Fatal("support cancellation should not set cancel_at_period_end")
+	}
+}
+
+func TestSyncRevenueCatWebhookUsesExistingProviderSubscriptionGroupWhenAttributeMissing(t *testing.T) {
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	store := revenueCatTestStore()
+	store.providerRefSubscription = &Subscription{
+		ID:                     "sub-prev",
+		UserID:                 "00000000-0000-0000-0000-000000000123",
+		CareGroupID:            "group-legacy",
+		PlanID:                 "plan-plus",
+		PlanCode:               "plus_399k",
+		PlanName:               "Care Plus",
+		Status:                 "active",
+		Provider:               "revenuecat_play_store",
+		ProviderSubscriptionID: "orig-legacy",
+	}
+	svc := NewService(store)
+
+	result, err := svc.SyncRevenueCatWebhook(context.Background(), RevenueCatWebhookPayload{
+		Event: RevenueCatEvent{
+			ID:                    "evt-renewal-legacy",
+			Type:                  "RENEWAL",
+			AppUserID:             "00000000-0000-0000-0000-000000000123",
+			ProductID:             "aisee_plus_399k_monthly",
+			OriginalTransactionID: "orig-legacy",
+			Store:                 "PLAY_STORE",
+			EventTimestampMS:      now.UnixMilli(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncRevenueCatWebhook() error: %v", err)
+	}
+	if result.Subscription == nil || result.Subscription.CareGroupID != "group-legacy" {
+		t.Fatalf("unexpected subscription: %+v", result.Subscription)
+	}
+	if len(store.providerSubscriptions) != 1 || store.providerSubscriptions[0].CareGroupID != "group-legacy" {
+		t.Fatalf("provider upsert = %+v", store.providerSubscriptions)
+	}
+}
+
+func TestSyncRevenueCatWebhookUsesActiveCareGroupWhenAttributeMissing(t *testing.T) {
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	store := revenueCatTestStore()
+	store.careGroup = CareGroupSummary{
+		ID:               "group-active",
+		Name:             "Gia dinh active",
+		OwnerUserID:      "family-owner",
+		CurrentUserRole:  "cared_user",
+		CanManageBilling: false,
+		CaredUserCount:   1,
+		MemberCount:      2,
+	}
+	svc := NewService(store)
+
+	result, err := svc.SyncRevenueCatWebhook(context.Background(), RevenueCatWebhookPayload{
+		Event: RevenueCatEvent{
+			ID:                    "evt-renewal-active-group",
+			Type:                  "RENEWAL",
+			AppUserID:             "00000000-0000-0000-0000-000000000123",
+			ProductID:             "aisee_plus_399k_monthly",
+			OriginalTransactionID: "orig-active-group",
+			Store:                 "PLAY_STORE",
+			EventTimestampMS:      now.UnixMilli(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncRevenueCatWebhook() error: %v", err)
+	}
+	if result.Subscription == nil || result.Subscription.CareGroupID != "group-active" {
+		t.Fatalf("unexpected subscription: %+v", result.Subscription)
+	}
+	if len(store.providerSubscriptions) != 1 || store.providerSubscriptions[0].CareGroupID != "group-active" {
+		t.Fatalf("provider upsert = %+v", store.providerSubscriptions)
+	}
+}
+
 func TestSyncRevenueCatWebhookExpirationRevokesSubscription(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	store := revenueCatTestStore()
@@ -177,6 +311,43 @@ func TestSyncRevenueCatWebhookExpirationRevokesSubscription(t *testing.T) {
 	}
 	if result.Subscription.Status != "expired" {
 		t.Fatalf("status = %q", result.Subscription.Status)
+	}
+}
+
+func TestSyncRevenueCatWebhookRefundRevokesSubscriptionAndRecordsNegativeTransaction(t *testing.T) {
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	store := revenueCatTestStore()
+	svc := NewService(store)
+
+	result, err := svc.SyncRevenueCatWebhook(context.Background(), RevenueCatWebhookPayload{
+		Event: RevenueCatEvent{
+			ID:                    "evt-refund",
+			Type:                  "REFUND",
+			AppUserID:             "00000000-0000-0000-0000-000000000123",
+			ProductID:             "aisee_basic_149k_monthly",
+			OriginalTransactionID: "orig-refund-1",
+			Store:                 "PLAY_STORE",
+			EventTimestampMS:      now.UnixMilli(),
+			ExpirationAtMS:        ptrInt64(now.UnixMilli()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncRevenueCatWebhook() error: %v", err)
+	}
+	if result.Subscription == nil {
+		t.Fatal("expected subscription")
+	}
+	if result.Subscription.Status != "expired" {
+		t.Fatalf("status = %q", result.Subscription.Status)
+	}
+	if result.Transaction == nil {
+		t.Fatal("expected billing transaction")
+	}
+	if result.Transaction.Status != "refund" {
+		t.Fatalf("transaction status = %q", result.Transaction.Status)
+	}
+	if result.Transaction.Amount >= 0 {
+		t.Fatalf("refund amount = %v, want negative", result.Transaction.Amount)
 	}
 }
 

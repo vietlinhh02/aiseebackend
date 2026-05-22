@@ -10,15 +10,24 @@ import (
 
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/tracking"
+	"github.com/team-dang/aiseebackend/pkg/i18n"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
 type ReadService interface {
 	ListPlans(context.Context) ([]Plan, error)
-	CurrentBillingOverview(context.Context, string) (BillingOverviewResponse, error)
+	CurrentBillingOverview(
+		context.Context, BillingOverviewInput,
+	) (BillingOverviewResponse, error)
 	CurrentSubscription(context.Context, string) (SubscriptionResponse, error)
+	CurrentSubscriptionForBilling(
+		context.Context, BillingOverviewInput,
+	) (SubscriptionResponse, error)
 	CurrentEntitlements(context.Context, string) (EntitlementsResponse, error)
-	CurrentUsage(context.Context, string) (UsageResponse, error)
+	CurrentEntitlementsForBilling(
+		context.Context, BillingOverviewInput,
+	) (EntitlementsResponse, error)
+	CurrentUsage(context.Context, BillingOverviewInput) (UsageResponse, error)
 	CheckQuota(context.Context, QuotaCheckInput) (QuotaDecision, error)
 	RecordUsage(context.Context, UsageRecordInput) (UsageRecord, error)
 	RecordBillableUsage(context.Context, UsageRecordInput) (UsageRecord, error)
@@ -94,8 +103,24 @@ func (h *Handler) CurrentSubscription(
 	r *http.Request,
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
-	resp, err := h.service.CurrentSubscription(r.Context(), userID)
+	resp, err := h.service.CurrentSubscriptionForBilling(
+		r.Context(),
+		BillingOverviewInput{
+			UserID:      userID,
+			CareGroupID: r.URL.Query().Get("care_group_id"),
+			CaredUserID: r.URL.Query().Get("cared_user_id"),
+		},
+	)
 	if err != nil {
+		if errors.Is(err, ErrNoBillingCareGroup) {
+			response.Err(
+				w,
+				http.StatusConflict,
+				"no_billing_care_group",
+				i18n.T(i18n.FromContext(r.Context()), "billing.no_active_group_subscription"),
+			)
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"subscription_failed",
@@ -111,8 +136,24 @@ func (h *Handler) CurrentBillingOverview(
 	r *http.Request,
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
-	resp, err := h.service.CurrentBillingOverview(r.Context(), userID)
+	resp, err := h.service.CurrentBillingOverview(
+		r.Context(),
+		BillingOverviewInput{
+			UserID:      userID,
+			CareGroupID: r.URL.Query().Get("care_group_id"),
+			CaredUserID: r.URL.Query().Get("cared_user_id"),
+		},
+	)
 	if err != nil {
+		if errors.Is(err, ErrNoBillingCareGroup) {
+			response.Err(
+				w,
+				http.StatusConflict,
+				"no_billing_care_group",
+				i18n.T(i18n.FromContext(r.Context()), "billing.no_active_group_subscription"),
+			)
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"billing_overview_failed",
@@ -128,8 +169,24 @@ func (h *Handler) CurrentEntitlements(
 	r *http.Request,
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
-	resp, err := h.service.CurrentEntitlements(r.Context(), userID)
+	resp, err := h.service.CurrentEntitlementsForBilling(
+		r.Context(),
+		BillingOverviewInput{
+			UserID:      userID,
+			CareGroupID: r.URL.Query().Get("care_group_id"),
+			CaredUserID: r.URL.Query().Get("cared_user_id"),
+		},
+	)
 	if err != nil {
+		if errors.Is(err, ErrNoBillingCareGroup) {
+			response.Err(
+				w,
+				http.StatusConflict,
+				"no_billing_care_group",
+				i18n.T(i18n.FromContext(r.Context()), "billing.no_active_group_entitlements"),
+			)
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"entitlements_failed",
@@ -142,8 +199,24 @@ func (h *Handler) CurrentEntitlements(
 
 func (h *Handler) CurrentUsage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
-	resp, err := h.service.CurrentUsage(r.Context(), userID)
+	resp, err := h.service.CurrentUsage(
+		r.Context(),
+		BillingOverviewInput{
+			UserID:      userID,
+			CareGroupID: r.URL.Query().Get("care_group_id"),
+			CaredUserID: r.URL.Query().Get("cared_user_id"),
+		},
+	)
 	if err != nil {
+		if errors.Is(err, ErrNoBillingCareGroup) {
+			response.Err(
+				w,
+				http.StatusConflict,
+				"no_billing_care_group",
+				i18n.T(i18n.FromContext(r.Context()), "billing.no_active_group_quota"),
+			)
+			return
+		}
 		response.Err(
 			w, http.StatusInternalServerError,
 			"usage_failed",

@@ -15,11 +15,12 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  "user-123",
 		"role": "user",
+		"type": "access",
 		"exp":  time.Now().Add(time.Hour).Unix(),
 	})
 	tokenStr, _ := token.SignedString([]byte(secret))
 
-	handler := middleware.Auth(secret, nil)(http.HandlerFunc(
+	handler := middleware.Auth(secret, nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			userID := middleware.UserIDFromContext(r.Context())
 			if userID != "user-123" {
@@ -40,7 +41,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 }
 
 func TestAuthMiddleware_MissingToken(t *testing.T) {
-	handler := middleware.Auth("secret", nil)(http.HandlerFunc(
+	handler := middleware.Auth("secret", nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		},
@@ -63,7 +64,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	})
 	tokenStr, _ := token.SignedString([]byte(secret))
 
-	handler := middleware.Auth(secret, nil)(http.HandlerFunc(
+	handler := middleware.Auth(secret, nil, nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			t.Error("should not reach handler")
 		},

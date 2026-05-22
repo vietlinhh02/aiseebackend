@@ -1,3 +1,7 @@
+// Package music proxies audio streams. Usage (music_minutes / music_sessions) is recorded
+// when the client calls internal billing APIs: POST /api/internal/usage/session/start and
+// POST /api/internal/usage/session/commit with usage_type music_minutes — this service does
+// not observe playback duration by itself.
 package music
 
 import (

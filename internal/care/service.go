@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,12 +22,40 @@ type Store interface {
 		start time.Time,
 		end time.Time,
 	) (WindowData, error)
+	InsertCareEvent(ctx context.Context, in InsertCareEventInput) error
+	ListCareEventsForCitation(ctx context.Context, userID string, limit int) ([]CareEventRow, error)
+	CreateIncidentSOS(ctx context.Context, userID, roomName string, lat, lng float64, familyNotified int) (string, error)
+	AppendIncidentEvent(ctx context.Context, incidentID, eventType string, actorID *string, payload map[string]any) error
+	LatestIncidentInRange(ctx context.Context, userID string, start, end time.Time) (*IncidentRow, error)
+	ListIncidentEvents(ctx context.Context, incidentID string) ([]IncidentEventRow, error)
+	GetLatestOpenIncidentID(ctx context.Context, userID string) (string, bool, error)
+	HasFamilyLinkBetween(ctx context.Context, userA, userB string) (bool, error)
+	ListCareAlerts(ctx context.Context, userID, statusFilter string, limit int) ([]CareAlertRow, error)
+	InsertCareAlert(ctx context.Context, userID, ruleCode, severity, title string, body *string, metadata map[string]any) (string, error)
+	UpdateCareAlertAck(ctx context.Context, alertID, familyUserID string) error
+	UpdateCareAlertResolve(ctx context.Context, alertID, familyUserID string) error
+	UpdateCareAlertDismiss(ctx context.Context, alertID, familyUserID string) error
+	GetCareAlertForUser(ctx context.Context, alertID, userID string) (*CareAlertRow, error)
+	GetCareAlertByID(ctx context.Context, alertID string) (*CareAlertRow, error)
+	ListCareTasks(ctx context.Context, userID string, limit int) ([]CareTaskRow, error)
+	InsertCareTask(ctx context.Context, userID, createdBy, title string, dueAt *time.Time, metadata map[string]any) (string, error)
+	UpdateCareTask(ctx context.Context, taskID, userID, title string, dueAt *time.Time, status string, metadata map[string]any) error
+	CompleteCareTask(ctx context.Context, taskID, userID string) error
+	GetCareTask(ctx context.Context, taskID, userID string) (*CareTaskRow, error)
+	GetCareTaskByID(ctx context.Context, taskID string) (*CareTaskRow, error)
+	GetMemberPermissions(ctx context.Context, caredUserID, familyMemberID string) (map[string]any, error)
+	UpsertMemberPermissions(ctx context.Context, caredUserID, familyMemberID string, scopes map[string]any) error
+	InsertAuditLog(ctx context.Context, userID, toolName string, params map[string]any, result string) error
 }
 
 type BillingClient interface {
 	CurrentEntitlements(
 		ctx context.Context,
 		userID string,
+	) (billing.EntitlementsResponse, error)
+	CurrentEntitlementsForBilling(
+		ctx context.Context,
+		input billing.BillingOverviewInput,
 	) (billing.EntitlementsResponse, error)
 	RecordBillableUsage(
 		ctx context.Context,
@@ -48,6 +77,7 @@ type WindowData struct {
 	Metrics        []MetricEntry
 	Audits         []AuditEntry
 	Calls          []CallUsageEntry
+	CareEvents     []CareEventRow
 }
 
 type MedicationInfo struct {
@@ -219,7 +249,7 @@ func (s *Service) Timeline(
 	effectiveDays := requestedDays
 	if s.billing != nil {
 		allowedDays, err := s.entitlementInt(
-			ctx, requesterID, "care_timeline_days",
+			ctx, requesterID, userID, "care_timeline_days",
 		)
 		if err != nil {
 			return TimelineResponse{}, err
@@ -263,7 +293,7 @@ func (s *Service) DailyBrief(
 	day time.Time,
 ) (DailyBriefResponse, error) {
 	if err := s.requireBoolEntitlement(
-		ctx, requesterID, "daily_brief_enabled",
+		ctx, requesterID, userID, "daily_brief_enabled",
 		"Daily brief is not available on this plan",
 	); err != nil {
 		return DailyBriefResponse{}, err
@@ -289,7 +319,7 @@ func (s *Service) WeeklyReport(
 	endDate time.Time,
 ) (WeeklyReportResponse, error) {
 	if err := s.requireBoolEntitlement(
-		ctx, requesterID, "weekly_report_enabled",
+		ctx, requesterID, userID, "weekly_report_enabled",
 		"Weekly report is not available on this plan",
 	); err != nil {
 		return WeeklyReportResponse{}, err
@@ -315,7 +345,7 @@ func (s *Service) IncidentReport(
 	userID string,
 ) (IncidentReportResponse, error) {
 	if err := s.requireBoolEntitlement(
-		ctx, requesterID, "incident_report_enabled",
+		ctx, requesterID, userID, "incident_report_enabled",
 		"Incident report is not available on this plan",
 	); err != nil {
 		return IncidentReportResponse{}, err
@@ -326,6 +356,18 @@ func (s *Service) IncidentReport(
 	data, err := s.store.LoadWindow(ctx, userID, start, end)
 	if err != nil {
 		return IncidentReportResponse{}, fmt.Errorf("load incident window: %w", err)
+	}
+
+	inc, err := s.store.LatestIncidentInRange(ctx, userID, start, end)
+	if err != nil {
+		return IncidentReportResponse{}, fmt.Errorf("latest incident: %w", err)
+	}
+	if inc != nil {
+		evs, err := s.store.ListIncidentEvents(ctx, inc.ID)
+		if err != nil {
+			return IncidentReportResponse{}, fmt.Errorf("incident events: %w", err)
+		}
+		return incidentReportFromEntity(inc, evs, s.loc), nil
 	}
 
 	alert, ok := latestEmergencyAlert(data.Audits)
@@ -372,6 +414,10 @@ func (s *Service) ExportPDF(
 		}
 	}
 
+	if err := s.requirePDFExportAllowed(ctx, requesterID, userID, reportType); err != nil {
+		return ExportResponse{}, err
+	}
+
 	var reportData any
 	var err error
 	switch reportType {
@@ -406,19 +452,48 @@ func (s *Service) ExportPDF(
 		return ExportResponse{}, err
 	}
 
+	exportID := uuid.NewString()
+	summary := fmt.Sprintf("report_type=%s export_id=%s", reportType, exportID)
+	actor := requesterID
+	if err := s.store.InsertCareEvent(ctx, InsertCareEventInput{
+		UserID:    userID,
+		ActorID:   &actor,
+		ActorRole: "family",
+		EventType: "report.pdf.exported",
+		Severity:  "info",
+		Title:     "Care report exported (PDF placeholder)",
+		Summary:   &summary,
+		Metadata: map[string]any{
+			"report_type": reportType,
+			"export_id":   exportID,
+		},
+	}); err != nil {
+		return ExportResponse{}, fmt.Errorf("care export event: %w", err)
+	}
+	auditRes := fmt.Sprintf(`{"report_type":%q,"cared_user_id":%q,"export_id":%q}`,
+		reportType, userID, exportID)
+	if err := s.store.InsertAuditLog(ctx, requesterID, "care_export_pdf", map[string]any{
+		"cared_user_id": userID,
+		"report_type":   reportType,
+	}, auditRes); err != nil {
+		return ExportResponse{}, fmt.Errorf("care export audit: %w", err)
+	}
+
 	var usageRecordID string
 	if s.billing != nil {
 		record, err := s.billing.RecordBillableUsage(
 			ctx, billing.UsageRecordInput{
-				UserID:    requesterID,
-				UsageType: billing.UsagePDFExports,
-				Quantity:  1,
-				Unit:      "exports",
-				Source:    "care_dashboard_pdf_export",
-				SourceID:  uuid.NewString(),
+				UserID:      userID,
+				CaredUserID: userID,
+				UsageType:   billing.UsagePDFExports,
+				Quantity:    1,
+				Unit:        "exports",
+				Source:      "care_dashboard_pdf_export",
+				SourceID:    uuid.NewString(),
 				Metadata: map[string]any{
-					"cared_user_id": userID,
-					"report_type":   reportType,
+					"requester_id": requesterID,
+					"report_type":  reportType,
+					"export_id":    exportID,
 				},
 			},
 		)
@@ -429,7 +504,7 @@ func (s *Service) ExportPDF(
 	}
 
 	return ExportResponse{
-		ExportID:      uuid.NewString(),
+		ExportID:      exportID,
 		ReportType:    reportType,
 		Format:        "pdf_placeholder",
 		UsageRecordID: usageRecordID,
@@ -466,13 +541,14 @@ func (s *Service) windowForWeek(endDate time.Time) (time.Time, time.Time) {
 func (s *Service) requireBoolEntitlement(
 	ctx context.Context,
 	requesterID string,
+	caredUserID string,
 	key string,
 	message string,
 ) error {
 	if s.billing == nil {
 		return nil
 	}
-	value, err := s.entitlementBool(ctx, requesterID, key)
+	value, err := s.entitlementBool(ctx, requesterID, caredUserID, key)
 	if err != nil {
 		return err
 	}
@@ -485,9 +561,13 @@ func (s *Service) requireBoolEntitlement(
 func (s *Service) entitlementBool(
 	ctx context.Context,
 	requesterID string,
+	caredUserID string,
 	key string,
 ) (bool, error) {
-	resp, err := s.billing.CurrentEntitlements(ctx, requesterID)
+	resp, err := s.billing.CurrentEntitlementsForBilling(ctx, billing.BillingOverviewInput{
+		UserID:      requesterID,
+		CaredUserID: caredUserID,
+	})
 	if err != nil {
 		return false, fmt.Errorf("current entitlements: %w", err)
 	}
@@ -501,9 +581,13 @@ func (s *Service) entitlementBool(
 func (s *Service) entitlementInt(
 	ctx context.Context,
 	requesterID string,
+	caredUserID string,
 	key string,
 ) (int, error) {
-	resp, err := s.billing.CurrentEntitlements(ctx, requesterID)
+	resp, err := s.billing.CurrentEntitlementsForBilling(ctx, billing.BillingOverviewInput{
+		UserID:      requesterID,
+		CaredUserID: caredUserID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("current entitlements: %w", err)
 	}
@@ -512,6 +596,112 @@ func (s *Service) entitlementInt(
 		return 0, nil
 	}
 	return asInt(value.LimitValue), nil
+}
+
+func (s *Service) entitlementString(
+	ctx context.Context,
+	requesterID string,
+	caredUserID string,
+	key string,
+) (string, error) {
+	if s.billing == nil {
+		return "", nil
+	}
+	resp, err := s.billing.CurrentEntitlementsForBilling(ctx, billing.BillingOverviewInput{
+		UserID:      requesterID,
+		CaredUserID: caredUserID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("current entitlements: %w", err)
+	}
+	value, ok := resp.Entitlements[key]
+	if !ok {
+		return "", nil
+	}
+	return entitlementLimitToString(value.LimitValue), nil
+}
+
+func entitlementLimitToString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.Trim(t, `"`)
+	case float64:
+		return fmt.Sprintf("%.0f", t)
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case nil:
+		return ""
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return ""
+		}
+		s := strings.TrimSpace(string(b))
+		return strings.Trim(s, `"`)
+	}
+}
+
+func (s *Service) requireBillingOrDevBypass() error {
+	if s.billing != nil {
+		return nil
+	}
+	if os.Getenv("AISEE_ALLOW_UNBILLED_CARE_FEATURES") == "1" {
+		return nil
+	}
+	return &APIError{
+		Status:  503,
+		Code:    "billing_unconfigured",
+		Message: "Care paid features require billing; set AISEE_ALLOW_UNBILLED_CARE_FEATURES=1 for local dev",
+	}
+}
+
+func (s *Service) requirePDFExportAllowed(
+	ctx context.Context,
+	requesterID string,
+	caredUserID string,
+	reportType string,
+) error {
+	if err := s.requireBillingOrDevBypass(); err != nil {
+		return err
+	}
+	if s.billing == nil {
+		return nil
+	}
+	format, err := s.entitlementString(ctx, requesterID, caredUserID, "export_format")
+	if err != nil {
+		return err
+	}
+	if format == "" || format == "none" {
+		return &APIError{
+			Status:  402,
+			Code:    "pdf_export_not_available",
+			Message: "Export is not available on this plan (export_format)",
+		}
+	}
+	if format == "csv" {
+		return &APIError{
+			Status:  402,
+			Code:    "pdf_export_not_available",
+			Message: "PDF export requires a plan with PDF support",
+		}
+	}
+	if reportType == "weekly_report" {
+		ok, err := s.entitlementBool(ctx, requesterID, caredUserID, "weekly_report_pdf_enabled")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return &APIError{
+				Status:  402,
+				Code:    "weekly_pdf_not_enabled",
+				Message: "Weekly report PDF is not enabled on this plan",
+			}
+		}
+	}
+	return nil
 }
 
 func buildTimelineEvents(data WindowData) []TimelineEvent {
@@ -525,7 +715,27 @@ func buildTimelineEvents(data WindowData) []TimelineEvent {
 	}
 	_ = activeMedications
 
-	events := make([]TimelineEvent, 0, len(data.MedicationLogs)+len(data.Symptoms)+len(data.Metrics)+len(data.Audits)+len(data.Calls))
+	baseCap := len(data.MedicationLogs) + len(data.Symptoms) + len(data.Metrics) +
+		len(data.Audits) + len(data.Calls) + len(data.CareEvents)
+	events := make([]TimelineEvent, 0, baseCap)
+
+	for _, ce := range data.CareEvents {
+		detail := ""
+		if ce.Summary != nil {
+			detail = *ce.Summary
+		}
+		meta := ce.Metadata
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		events = append(events, TimelineEvent{
+			Kind:       ce.EventType,
+			Title:      ce.Title,
+			Detail:     detail,
+			OccurredAt: ce.OccurredAt,
+			Metadata:   meta,
+		})
+	}
 	for _, symptom := range data.Symptoms {
 		title := "Symptom logged: " + symptom.Symptom
 		detail := strings.TrimSpace(symptom.Severity)
@@ -716,6 +926,59 @@ func collectEscalations(audits []AuditEntry, alertAt time.Time) []IncidentEscala
 		return escalations[i].OccurredAt.Before(escalations[j].OccurredAt)
 	})
 	return escalations
+}
+
+func incidentReportFromEntity(
+	inc *IncidentRow,
+	evs []IncidentEventRow,
+	loc *time.Location,
+) IncidentReportResponse {
+	var notified int
+	if inc.Metadata != nil {
+		if n, ok := inc.Metadata["family_notified"].(float64); ok {
+			notified = int(n)
+		}
+	}
+	locPt := GeoPoint{}
+	if inc.Lat != nil && inc.Lng != nil {
+		locPt = GeoPoint{Lat: *inc.Lat, Lng: *inc.Lng}
+	}
+	escalations := make([]IncidentEscalation, 0)
+	for _, ev := range evs {
+		if ev.EventType != "sos.family_notified" {
+			continue
+		}
+		p := ev.Payload
+		if p == nil {
+			p = map[string]any{}
+		}
+		rem := asStringSlice(p["remaining"])
+		escalations = append(escalations, IncidentEscalation{
+			OccurredAt:  ev.OccurredAt,
+			Status:      strings.TrimSpace(asString(p["status"])),
+			ContactName: strings.TrimSpace(asString(p["contact_name"])),
+			Remaining:   rem,
+			RawToolName: ev.EventType,
+		})
+	}
+	resp := IncidentReportResponse{
+		AlertAt:        inc.OpenedAt,
+		FamilyNotified: notified,
+		Location:       locPt,
+		Escalations:    escalations,
+	}
+	resp.Summary = []string{
+		fmt.Sprintf(
+			"SOS alert sent at %s with %d family notifications.",
+			inc.OpenedAt.In(loc).Format(time.RFC3339),
+			notified,
+		),
+		fmt.Sprintf(
+			"Escalation attempts recorded: %d.",
+			len(escalations),
+		),
+	}
+	return resp
 }
 
 func symptomSummary(symptoms []SymptomEntry) string {

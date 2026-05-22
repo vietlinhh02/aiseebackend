@@ -111,14 +111,14 @@ func main() {
 
 	// Services
 	queries := dbgen.New(pool)
+	userService := user.NewService(pool)
 	authService := auth.NewService(pool, rdb, jwtSecret)
 	authHandler := auth.NewHandler(authService)
 	assistantBridge := assistant.NewWebSocketBridge(os.Getenv("ASSISTANT_BRIDGE_URL"))
-	assistantService := assistant.NewServiceWithBridge(jwtSecret, assistantBridge)
+	assistantService := assistant.NewServiceWithBridge(jwtSecret, assistantBridge).WithUserService(userService)
 	trackingService := tracking.NewService(tracking.NewPgxStore(pool))
 	assistantHandler := assistant.NewHandlerWithTracking(assistantService, trackingService)
 
-	userService := user.NewService(pool)
 	userHandler := user.NewHandler(userService)
 	billingService := billing.NewService(billing.NewPgxStore(pool))
 	billingHandler := billing.NewHandlerWithConfigAndTracking(
@@ -169,15 +169,19 @@ func main() {
 	}()
 	defer scheduler.Stop()
 
-	emergService := emergency.NewService(queries, pusher, lkClient)
+	careStore := care.NewStore(pool)
+	careService := care.NewService(careStore, billingService)
+	careHandler := care.NewHandler(careService, userService)
+
+	emergService := emergency.NewService(
+		queries, pusher, lkClient, care.NewEmergencySOSHook(careStore),
+	)
 	musicService := music.NewService(publicBaseURL())
 
 	// Dashboard
 	dashService := dashboard.NewService(queries)
 	dashHandler := dashboard.NewHandler(dashService, userService)
 	meHandler := dashboard.NewMeHandler(dashService)
-	careService := care.NewService(care.NewStore(pool), billingService)
-	careHandler := care.NewHandler(careService, userService)
 
 	// Volunteer
 	volService := volunteer.NewService(
@@ -195,7 +199,7 @@ func main() {
 	)
 
 	adminStore := admin.NewStore(pool)
-	adminService := admin.NewService(adminStore)
+	adminService := admin.NewService(adminStore, billingService)
 	adminHandler := admin.NewHandler(adminService)
 	trackingHandler := tracking.NewHandler(trackingService)
 
@@ -204,6 +208,7 @@ func main() {
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
 	r.Use(middleware.RequestLog)
+	r.Use(middleware.Locale)
 	r.Use(chiMiddleware.Recoverer)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -227,14 +232,18 @@ func main() {
 		r.Get("/music/stream/{id}", musicService.Stream)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(jwtSecret, rdb))
+			r.Use(middleware.Auth(jwtSecret, rdb, pool))
 
 			// Users
 			r.Get("/users/me", userHandler.GetMe)
+			r.Get("/users/me/group", userHandler.GetCurrentGroup)
 			r.Put("/users/me", userHandler.UpdateMe)
 			r.Post("/users/family-link", userHandler.CreateFamilyLink)
+			r.Delete("/users/family-invite/{invite_code}", userHandler.RevokeFamilyInvite)
 			r.Delete("/users/family-link/{link_id}", userHandler.DeleteFamilyLink)
 			r.Post("/users/join-family", userHandler.JoinFamily)
+			r.Post("/users/leave-group", userHandler.LeaveGroup)
+			r.Post("/users/transfer-group-ownership", userHandler.TransferGroupOwnership)
 			r.Get("/users/me/family", userHandler.GetFamily)
 
 			// Calls
@@ -284,6 +293,22 @@ func main() {
 				})
 			})
 
+			// Care dashboard family APIs (roadmap §9: /api/v1/care/... — cared user only in list/create paths).
+			r.Route("/care", func(r chi.Router) {
+				r.Get("/users/{user_id}/alerts", careHandler.ListAlerts)
+				r.Post("/alerts/{alert_id}/ack", careHandler.AckAlert)
+				r.Post("/alerts/{alert_id}/resolve", careHandler.ResolveAlert)
+				r.Post("/alerts/{alert_id}/dismiss", careHandler.DismissAlert)
+				r.Get("/users/{user_id}/tasks", careHandler.ListTasks)
+				r.Post("/users/{user_id}/tasks", careHandler.CreateTask)
+				r.Put("/tasks/{task_id}", careHandler.UpdateTask)
+				r.Post("/tasks/{task_id}/complete", careHandler.CompleteTask)
+				r.Get("/users/{user_id}/permissions", careHandler.GetPermissions)
+				r.Put("/users/{user_id}/permissions/{family_id}", careHandler.PutPermissions)
+				r.Post("/users/{user_id}/coach/query", careHandler.CoachQuery)
+				r.Post("/users/{user_id}/patterns/run", careHandler.RunPatterns)
+			})
+
 			// Volunteers
 			r.Route("/volunteers", func(r chi.Router) {
 				r.Get("/status", volHandler.GetStatus)
@@ -315,7 +340,7 @@ func main() {
 	r.Post("/api/webhooks/revenuecat", billingHandler.RevenueCatWebhook)
 
 	r.Route("/api/admin", func(r chi.Router) {
-		r.Use(middleware.Auth(jwtSecret, rdb))
+		r.Use(middleware.Auth(jwtSecret, rdb, pool))
 		r.Use(admin.RequireAdmin)
 
 		r.Get("/users", adminHandler.SearchUsers)
@@ -326,10 +351,15 @@ func main() {
 		r.Get("/users/{user_id}/ai-cost", adminHandler.GetUserAICostEvents)
 		r.Get("/users/{user_id}/timeline", adminHandler.GetUserTimeline)
 		r.Get("/users/{user_id}/billing-transactions", adminHandler.ListUserBillingTransactions)
+		r.Get("/users/{user_id}/payments", adminHandler.GetUserPayments)
+		r.Get("/users/{user_id}/invoices", adminHandler.GetUserInvoices)
+		r.Post("/payments/{payment_id}/refund-note", adminHandler.PostPaymentRefundNote)
 		r.Get("/users/{user_id}/entitlements", adminHandler.GetUserEntitlements)
 		r.Post("/users/{user_id}/manual-grant", adminHandler.ManualGrant)
 		r.Get("/billing-transactions", adminHandler.ListBillingTransactions)
 		r.Get("/subscription-events", adminHandler.ListSubscriptionEvents)
+		r.Get("/incidents", adminHandler.ListIncidents)
+		r.Get("/alerts", adminHandler.ListCareAlerts)
 		r.Get("/audit-logs", adminHandler.GetAuditLogs)
 		r.Get("/analytics", adminHandler.GetAnalytics)
 		r.Get("/ai-cost", adminHandler.GetAICostSummary)

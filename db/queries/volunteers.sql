@@ -10,7 +10,7 @@ SELECT * FROM volunteers WHERE user_id = $1;
 UPDATE volunteers SET available = $1 WHERE user_id = $2;
 
 -- name: GetAvailableVolunteers :many
-SELECT v.*, u.display_name, u.fcm_token, u.apns_token, u.apns_voip_token
+SELECT v.*, u.display_name, u.fcm_token, u.apns_token, u.apns_voip_token, u.settings
 FROM volunteers v
 JOIN users u ON u.id = v.user_id
 WHERE v.available = true

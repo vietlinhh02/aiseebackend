@@ -8,6 +8,7 @@ from livekit import rtc
 from livekit.agents import Agent, function_tool
 
 from backend import BackendClient
+from camera_activation_policy import validate_camera_activation_consent
 from prompts import select_prompt
 
 logger = logging.getLogger("aisee-agent")
@@ -43,16 +44,16 @@ class AiSeeAgent(Agent):
     async def make_voice_call(self, contact_name: str) -> dict:
         """Call a family member by name or relationship (voice only)."""
         return await self._backend.tool_call(
-            "make_voice_call", self._uid(),
-            {"contact_name": contact_name},
+            "call_family_contact", self._uid(),
+            {"contact_name": contact_name, "call_type": "voice"},
         )
 
     @function_tool()
     async def make_video_call(self, contact_name: str) -> dict:
         """Video call a family member by name or relationship."""
         return await self._backend.tool_call(
-            "make_video_call", self._uid(),
-            {"contact_name": contact_name},
+            "call_family_contact", self._uid(),
+            {"contact_name": contact_name, "call_type": "video"},
         )
 
     @function_tool()
@@ -78,10 +79,54 @@ class AiSeeAgent(Agent):
         )
 
     @function_tool()
+    async def list_family_contacts(self) -> dict:
+        """Check realtime family connections and list linked family contacts."""
+        return await self._backend.tool_call(
+            "list_family_contacts", self._uid(), {},
+        )
+
+    @function_tool()
+    async def call_family_contact(
+        self, contact_name: str, call_type: str = "voice",
+    ) -> dict:
+        """Call a family contact by name or relationship with voice or video."""
+        return await self._backend.tool_call(
+            "call_family_contact", self._uid(),
+            {"contact_name": contact_name, "call_type": call_type},
+        )
+
+    @function_tool()
+    async def call_support_contact(
+        self, contact_name: str = "", call_type: str = "voice",
+    ) -> dict:
+        """Call a support contact: named family first, otherwise volunteer support."""
+        return await self._backend.tool_call_with_timeout(
+            "call_support_contact", self._uid(),
+            {"contact_name": contact_name, "call_type": call_type},
+            timeout=45.0,
+        )
+
+    @function_tool()
     async def activate_camera(
-        self, reason: str = "User requested",
+        self,
+        reason: str,
+        consent_phrase: str,
+        consent_source: str,
     ) -> dict:
         """Enable camera to see through user's phone."""
+        allowed, detail = validate_camera_activation_consent(
+            consent_source=consent_source,
+            consent_phrase=consent_phrase,
+        )
+        if not allowed:
+            return {
+                "status": "blocked",
+                "error": detail,
+                "message": (
+                    "Camera only opens after the user explicitly asks to see "
+                    "through camera or clearly agrees."
+                ),
+            }
         source_id = f"camera-{uuid.uuid4()}"
         try:
             await self._backend.check_quota(
@@ -100,7 +145,11 @@ class AiSeeAgent(Agent):
                 "activations",
                 "agent",
                 source_id,
-                {"reason": reason},
+                {
+                    "reason": reason,
+                    "consent_source": consent_source,
+                    "consent_phrase": consent_phrase,
+                },
             )
             return result
         except Exception as exc:

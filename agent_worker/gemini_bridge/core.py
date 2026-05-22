@@ -33,8 +33,15 @@ PENDING_TASK_DRAIN_SECONDS = 0.25
 TOOL_ROUTING_INSTRUCTIONS = """
 
 === TOOL ROUTING RULES ===
-- Khi người dùng yêu cầu bật camera, mở camera, nhìn xung quanh, xem giúp,
-  hoặc mô tả môi trường: gọi tool activate_camera trước khi trả lời.
+- Camera chi duoc mo khi co dong y ro rang.
+- Neu user noi ro "bat camera", "mo camera", "cho toi xem", "cho con xem",
+  "xem giup", "nhin giup": goi activate_camera voi consent_source la
+  explicit_request va consent_phrase la cum tu user vua noi.
+- Neu user noi mo ho nhu "doc cai nay", "cai nay la gi", "phia truoc co gi":
+  KHONG goi activate_camera ngay. Hay hoi co muon mo camera de xem khong.
+- Chi sau khi user dong y ro rang nhu "co", "uh", "duoc", "mo di", "xem di"
+  moi goi activate_camera voi consent_source la explicit_confirmation va
+  consent_phrase la cau dong y do.
 - Khi người dùng yêu cầu tắt camera, dừng camera, thôi nhìn, dừng quay,
   hoặc nói "tắt đi" ngay sau khi camera đang bật: gọi tool deactivate_camera
   trước khi trả lời.
@@ -331,6 +338,12 @@ class GeminiTransportSession:
             await state_publisher.publish(AgentState.THINKING)
             await send_wake_greeting(gemini_session)
             return
+        if event.action == "incoming_call":
+            await state_publisher.publish(AgentState.THINKING)
+            await announce_incoming_call(gemini_session, event.payload)
+            return
+        if event.action == "incoming_call_cleared":
+            return
         if event.action == "interrupt":
             await state_publisher.publish(AgentState.IDLE)
             return
@@ -339,6 +352,20 @@ class GeminiTransportSession:
 
 async def send_wake_greeting(session) -> None:
     await session.send_realtime_input(text=WAKE_GREETING_TEXT)
+
+
+async def announce_incoming_call(session, payload: dict) -> None:
+    caller = str(payload.get("caller_name") or "").strip() or "ai do"
+    call_type = str(payload.get("call_type") or "voice").strip().lower()
+    call_label = "video" if call_type == "video" else "thoai"
+    text = (
+        f"Co cuoc goi {call_label} den tu {caller}. "
+        "Hay thong bao cho nguoi dung va hoi xem ho co muon nghe khong. "
+        "Neu nguoi dung dong y nghe, hay goi tool answer_incoming_call. "
+        "Neu nguoi dung tu choi, hay goi tool decline_incoming_call. "
+        "Khong duoc tu y bat may neu nguoi dung chua tra loi."
+    )
+    await session.send_realtime_input(text=text)
 
 
 def _function_call_args(function_call) -> dict:

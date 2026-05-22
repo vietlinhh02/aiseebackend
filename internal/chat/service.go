@@ -32,7 +32,7 @@ func NewService(
 
 func (s *Service) SendMessage(
 	ctx context.Context,
-	senderID, receiverID, contentText, voiceURL string,
+	senderID, receiverID, contentText, voiceURL, imageURL string,
 ) (dbgen.Message, error) {
 	sid, err := pgutil.ParsePgUUID(senderID)
 	if err != nil {
@@ -53,6 +53,9 @@ func (s *Service) SendMessage(
 			VoiceUrl: pgtype.Text{
 				String: voiceURL, Valid: voiceURL != "",
 			},
+			ImageUrl: pgtype.Text{
+				String: imageURL, Valid: imageURL != "",
+			},
 		},
 	)
 	if err != nil {
@@ -67,8 +70,11 @@ func (s *Service) SendMessage(
 			if len(body) > 100 {
 				body = body[:100] + "..."
 			}
-			if body == "" {
+			if body == "" && voiceURL != "" {
 				body = "Voice message"
+			}
+			if body == "" && imageURL != "" {
+				body = "Image"
 			}
 
 			s.pusher.Send(ctx, push.UserTokens{
@@ -109,6 +115,7 @@ func messagePayload(msg dbgen.Message) map[string]any {
 		"receiver_id":  pgutil.PgUUIDToString(msg.ReceiverID),
 		"content_text": "",
 		"voice_url":    "",
+		"image_url":    "",
 		"is_read":      false,
 		"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 	}
@@ -117,6 +124,9 @@ func messagePayload(msg dbgen.Message) map[string]any {
 	}
 	if msg.VoiceUrl.Valid {
 		payload["voice_url"] = msg.VoiceUrl.String
+	}
+	if msg.ImageUrl.Valid {
+		payload["image_url"] = msg.ImageUrl.String
 	}
 	if msg.IsRead.Valid {
 		payload["is_read"] = msg.IsRead.Bool
