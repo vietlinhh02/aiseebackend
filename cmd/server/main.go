@@ -26,6 +26,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/medication"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/music"
+	"github.com/team-dang/aiseebackend/internal/supporter"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
 	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/internal/upload"
@@ -207,6 +208,9 @@ func main() {
 	)
 	volHandler := volunteer.NewHandler(volService)
 
+	supporterService := supporter.NewService(pool)
+	supporterHandler := supporter.NewHandler(supporterService)
+
 	toolHandler := toolcall.NewHandler(
 		chatService, callService, userService,
 		medService, healthService, aptService,
@@ -291,6 +295,10 @@ func main() {
 				r.Get("/medications", meHandler.Medications)
 				r.Get("/appointments", meHandler.Appointments)
 				r.Get("/health", meHandler.Health)
+
+				r.Get("/supporter/overview", supporterHandler.GetOverview)
+				r.Post("/supporter/watch-ad", supporterHandler.WatchAd)
+				r.Post("/supporter/redeem", supporterHandler.Redeem)
 			})
 
 			// Dashboard (family)

@@ -321,6 +321,29 @@ type SubscriptionEvent struct {
 	CareGroupID     pgtype.UUID        `json:"care_group_id"`
 }
 
+type SupporterDailyAdWatch struct {
+	UserID    pgtype.UUID `json:"user_id"`
+	WatchDate pgtype.Date `json:"watch_date"`
+	Count     int32       `json:"count"`
+}
+
+type SupporterTransaction struct {
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	Type            string             `json:"type"`
+	Amount          int32              `json:"amount"`
+	RecipientUserID pgtype.UUID        `json:"recipient_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type SupporterWallet struct {
+	UserID        pgtype.UUID        `json:"user_id"`
+	Balance       int32              `json:"balance"`
+	TotalEarned   int32              `json:"total_earned"`
+	TotalRedeemed int32              `json:"total_redeemed"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type TrackingEvent struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
