@@ -249,6 +249,9 @@ class GeminiTransportSession:
     transport: GeminiTransport
     tool_router: ToolRouter
     nsfw_filter: NsfwFilter | None = None
+    backend: object | None = None
+    user_id: str = ""
+    session_id: str = ""
 
     async def run(self, gemini_session) -> None:
         state_publisher = TransportStatePublisher(transport=self.transport)
@@ -347,11 +350,42 @@ class GeminiTransportSession:
         if event.action == "interrupt":
             await state_publisher.publish(AgentState.IDLE)
             return
+        if event.action == "nsfw_detected":
+            await state_publisher.publish(AgentState.THINKING)
+            await send_nsfw_warning(gemini_session)
+            if self.backend is not None and self.user_id:
+                try:
+                    await self.backend.record_tracking_event(
+                        event_type="camera_blocked_nsfw",
+                        category="safety_care",
+                        user_id=self.user_id,
+                        metadata={
+                            "session_id": self.session_id,
+                            "source": "client_tflite",
+                        },
+                        severity="warning",
+                        source="agent_worker",
+                        source_id=self.session_id,
+                    )
+                except Exception:
+                    logger.warning("failed to record nsfw tracking event", exc_info=True)
+            return
         logger.info("ignoring unsupported control action=%s", event.action)
+
+
+NSFW_WARNING_TEXT = (
+    "Camera da tam tat vi phat hien noi dung khong phu hop. "
+    "Hay thong bao ngan gon cho nguoi dung biet camera da tam dung "
+    "va de nghi huong camera vao noi dung phu hop hon."
+)
 
 
 async def send_wake_greeting(session) -> None:
     await session.send_realtime_input(text=WAKE_GREETING_TEXT)
+
+
+async def send_nsfw_warning(session) -> None:
+    await session.send_realtime_input(text=NSFW_WARNING_TEXT)
 
 
 async def announce_incoming_call(session, payload: dict) -> None:

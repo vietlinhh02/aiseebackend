@@ -237,6 +237,10 @@ class BackendClient:
         category: str,
         user_id: str = "",
         metadata: dict | None = None,
+        *,
+        severity: str = "",
+        source: str = "agent_worker",
+        source_id: str = "unknown",
     ) -> dict:
         """Record a tracking event for admin observability."""
         resp = await self.client.post(
@@ -245,6 +249,9 @@ class BackendClient:
                 "event_type": event_type,
                 "category": category,
                 "user_id": user_id,
+                "severity": severity,
+                "source": source,
+                "source_id": source_id,
                 "metadata": metadata or {},
             },
             headers={"X-Internal-Key": self.api_key},

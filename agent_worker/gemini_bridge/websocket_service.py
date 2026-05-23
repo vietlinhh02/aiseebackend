@@ -213,6 +213,9 @@ class GeminiBridgeWebSocketTransport:
             await self._resolve_tool_result(decoded, payload_map)
             return None
 
+        if message_type == "nsfw_detected":
+            return InboundControlEvent(action="nsfw_detected", payload=payload_map)
+
         if message_type == "ping":
             await self._send_json(
                 {
@@ -419,14 +422,17 @@ class GeminiBridgeWebSocketService:
         )
         transport.on_audio_start = usage_tracker.start
         transport.on_audio_stop = usage_tracker.commit
+        user_id = str(session_context.get("user_id") or "")
+        source_id = str(session_context.get("session_id") or "")
         live_session = GeminiTransportSession(
             settings=self.settings,
             transport=transport,
             tool_router=tool_router,
             nsfw_filter=_load_nsfw_filter_for_service(self.log),
+            backend=backend,
+            user_id=user_id,
+            session_id=source_id,
         )
-        user_id = str(session_context.get("user_id") or "")
-        source_id = str(session_context.get("session_id") or "")
         session_started_at: datetime | None = None
         session_failed = False
 

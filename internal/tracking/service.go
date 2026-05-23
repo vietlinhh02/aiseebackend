@@ -87,6 +87,7 @@ func defaultSeverity(eventType string) string {
 	if strings.Contains(eventType, "failed") ||
 		strings.Contains(eventType, "fallback") ||
 		strings.Contains(eventType, "skipped") ||
+		strings.Contains(eventType, "blocked") ||
 		strings.Contains(eventType, "abandoned") {
 		return "warning"
 	}
