@@ -1,0 +1,802 @@
+openapi: 3.0.3
+info:
+  title: AiSee Internal API
+  version: "2026-05-24"
+  description: |
+    Internal contract for trusted worker-to-backend calls under `/api/internal`.
+    Scope intentionally starts with worker-facing billing, tool-call, and tracking endpoints.
+  license:
+    name: Proprietary
+servers:
+  - url: /api/internal
+security:
+  - InternalKeyAuth: []
+tags:
+  - name: toolcall
+    description: Trusted agent tool dispatch
+  - name: billing
+    description: Internal quota and usage ledger writes
+  - name: tracking
+    description: Internal observability event writes
+paths:
+  /tool-call:
+    post:
+      tags: [toolcall]
+      operationId: handleToolCall
+      summary: Dispatch trusted agent tool call
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolCallRequest'
+      responses:
+        "200":
+          description: Tool-specific JSON object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCallResponse'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+        "402":
+          $ref: '#/components/responses/QuotaExceededResponse'
+  /usage/check:
+    post:
+      tags: [billing]
+      operationId: checkQuota
+      summary: Check trusted quota decision before billable action
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuotaCheckInput'
+      responses:
+        "200":
+          description: Quota decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaDecision'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+        "402":
+          $ref: '#/components/responses/QuotaExceededResponse'
+  /usage/record:
+    post:
+      tags: [billing]
+      operationId: recordUsage
+      summary: Record trusted billable usage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageRecordInput'
+      responses:
+        "201":
+          description: Usage recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageRecord'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+        "402":
+          $ref: '#/components/responses/QuotaExceededResponse'
+  /usage/session/start:
+    post:
+      tags: [billing]
+      operationId: startUsageSession
+      summary: Start trusted usage session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageSessionInput'
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageSession'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+  /usage/session/commit:
+    post:
+      tags: [billing]
+      operationId: commitUsageSession
+      summary: Commit trusted usage session into ledger record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommitUsageSessionInput'
+      responses:
+        "200":
+          description: Usage record created from session commit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageRecord'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+        "402":
+          $ref: '#/components/responses/QuotaExceededResponse'
+  /ai-cost/record:
+    post:
+      tags: [billing]
+      operationId: recordAICostEvent
+      summary: Record AI cost telemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AICostEventInput'
+      responses:
+        "201":
+          description: AI cost recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AICostEvent'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+  /tracking/events:
+    post:
+      tags: [tracking]
+      operationId: recordTrackingEvent
+      summary: Record internal tracking event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+      responses:
+        "201":
+          description: Tracking event recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        "400":
+          $ref: '#/components/responses/ErrorResponse400'
+        "401":
+          $ref: '#/components/responses/ErrorResponse401'
+components:
+  securitySchemes:
+    InternalKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+  responses:
+    ErrorResponse400:
+      description: Request body invalid or domain validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ErrorResponse401:
+      description: Missing or invalid internal API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    QuotaExceededResponse:
+      description: Quota exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/QuotaExceededResponse'
+  schemas:
+    UsageType:
+      type: string
+      enum:
+        - ai_minutes
+        - camera_activations
+        - voice_call_minutes
+        - video_calls
+        - video_call_minutes
+        - music_sessions
+        - music_minutes
+        - navigation_sessions
+        - volunteer_matches
+        - pdf_exports
+        - care_coach_questions
+        - pattern_detection_runs
+    FlexibleObject:
+      type: object
+      additionalProperties: true
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+    QuotaErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - usage_type
+        - required
+        - remaining
+      properties:
+        code:
+          type: string
+          example: quota_exceeded
+        message:
+          type: string
+          example: Quota exceeded
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        required:
+          type: number
+          format: double
+        remaining:
+          type: number
+          format: double
+        plan_code:
+          type: string
+        reset_period:
+          type: string
+    QuotaExceededResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/QuotaErrorDetail'
+    ToolCallRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - tool
+        - user_id
+      properties:
+        tool:
+          type: string
+        user_id:
+          type: string
+        params:
+          $ref: '#/components/schemas/FlexibleObject'
+      example:
+        tool: make_voice_call
+        user_id: user-1
+        params:
+          contact_name: Lan
+    ToolCallResponse:
+      type: object
+      description: Tool-specific payload. Shape varies by tool route.
+      additionalProperties: true
+      example:
+        status: room_created
+        room_name: voice-user-1
+        token: lk-token
+        callee_name: Lan
+    QuotaCheckInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - usage_type
+        - quantity
+      properties:
+        user_id:
+          type: string
+        care_group_id:
+          type: string
+        cared_user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        quantity:
+          type: number
+          format: double
+    UsageQuota:
+      type: object
+      additionalProperties: false
+      required:
+        - usage_type
+        - limit
+        - used
+        - granted
+        - remaining
+        - unlimited
+        - upgrade_suggested
+      properties:
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        feature_key:
+          type: string
+        limit:
+          type: number
+          format: double
+        used:
+          type: number
+          format: double
+        granted:
+          type: number
+          format: double
+        remaining:
+          type: number
+          format: double
+        unit:
+          type: string
+        reset_period:
+          type: string
+        unlimited:
+          type: boolean
+        upgrade_suggested:
+          type: boolean
+    QuotaDecision:
+      type: object
+      additionalProperties: false
+      required:
+        - allowed
+        - usage_type
+        - required
+        - remaining
+        - unlimited
+      properties:
+        allowed:
+          type: boolean
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        required:
+          type: number
+          format: double
+        remaining:
+          type: number
+          format: double
+        unlimited:
+          type: boolean
+        plan_code:
+          type: string
+        reset_period:
+          type: string
+        quota:
+          $ref: '#/components/schemas/UsageQuota'
+    UsageRecordInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - usage_type
+        - quantity
+        - unit
+        - source
+        - source_id
+      properties:
+        user_id:
+          type: string
+        care_group_id:
+          type: string
+        cared_user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        quantity:
+          type: number
+          format: double
+          minimum: 0
+          exclusiveMinimum: true
+        unit:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+    UsageRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - usage_type
+        - quantity
+        - unit
+        - source
+        - source_id
+        - created_at
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        quantity:
+          type: number
+          format: double
+        unit:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+        created_at:
+          type: string
+          format: date-time
+    UsageSessionInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - usage_type
+        - unit
+        - source
+        - source_id
+        - started_at
+      properties:
+        user_id:
+          type: string
+        care_group_id:
+          type: string
+        cared_user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        reserved_quantity:
+          type: number
+          format: double
+        unit:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+    UsageSession:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - usage_type
+        - unit
+        - source
+        - source_id
+        - status
+        - started_at
+        - created_at
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        reserved_quantity:
+          type: number
+          format: double
+        committed_quantity:
+          type: number
+          format: double
+        unit:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+        created_at:
+          type: string
+          format: date-time
+    CommitUsageSessionInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - usage_type
+        - unit
+        - source
+        - source_id
+        - started_at
+        - ended_at
+      properties:
+        user_id:
+          type: string
+        care_group_id:
+          type: string
+        cared_user_id:
+          type: string
+        usage_type:
+          $ref: '#/components/schemas/UsageType'
+        quantity:
+          type: number
+          format: double
+        unit:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+    AICostEventInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - provider
+        - model
+        - modality
+        - source
+        - source_id
+        - cost_usd
+        - estimated
+      properties:
+        user_id:
+          type: string
+        care_group_id:
+          type: string
+        cared_user_id:
+          type: string
+        usage_ledger_id:
+          type: string
+        session_id:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        modality:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+          minimum: 0
+        output_tokens:
+          type: integer
+          format: int64
+          minimum: 0
+        audio_input_seconds:
+          type: number
+          format: double
+          minimum: 0
+        audio_output_seconds:
+          type: number
+          format: double
+          minimum: 0
+        image_count:
+          type: integer
+          format: int64
+          minimum: 0
+        video_seconds:
+          type: number
+          format: double
+          minimum: 0
+        cost_usd:
+          type: number
+          format: double
+          minimum: 0
+        cost_vnd:
+          type: number
+          format: double
+          minimum: 0
+        currency:
+          type: string
+        estimated:
+          type: boolean
+        pricing_version:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+    AICostEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - user_id
+        - provider
+        - model
+        - modality
+        - source
+        - source_id
+        - cost_usd
+        - estimated
+        - occurred_at
+        - created_at
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        usage_ledger_id:
+          type: string
+        session_id:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        modality:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        audio_input_seconds:
+          type: number
+          format: double
+        audio_output_seconds:
+          type: number
+          format: double
+        image_count:
+          type: integer
+          format: int64
+        video_seconds:
+          type: number
+          format: double
+        cost_usd:
+          type: number
+          format: double
+        cost_vnd:
+          type: number
+          format: double
+        currency:
+          type: string
+        estimated:
+          type: boolean
+        pricing_version:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+        created_at:
+          type: string
+          format: date-time
+    EventInput:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - event_type
+        - category
+        - source
+        - source_id
+      properties:
+        user_id:
+          type: string
+        actor_id:
+          type: string
+        event_type:
+          type: string
+        category:
+          type: string
+        severity:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        status:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'
+    Event:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - user_id
+        - event_type
+        - category
+        - source
+        - source_id
+        - occurred_at
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        actor_id:
+          type: string
+        event_type:
+          type: string
+        category:
+          type: string
+        severity:
+          type: string
+        source:
+          type: string
+        source_id:
+          type: string
+        status:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          $ref: '#/components/schemas/FlexibleObject'

@@ -15,3 +15,5 @@ def test_config_no_longer_exposes_ai_engine_switch(monkeypatch):
     assert not hasattr(config, "AI_ENGINE")
     assert not hasattr(config, "AIEngine")
     assert not hasattr(config, "get_ai_engine")
+    assert config.get_settings().ai_transport == "websocket"
+    assert config.AI_TRANSPORT == "websocket"

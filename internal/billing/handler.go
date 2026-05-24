@@ -3,13 +3,13 @@ package billing
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/tracking"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/i18n"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
@@ -438,7 +438,7 @@ func revenueCatAuthorizationMatches(got string, want string) bool {
 }
 
 func decodeBillingJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, v); inputErr != nil {
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",

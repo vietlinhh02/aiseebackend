@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/user"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -39,7 +39,7 @@ func NewHandler(
 }
 
 type SendMessageRequest struct {
-	ReceiverID  string `json:"receiver_id"`
+	ReceiverID  string `json:"receiver_id" validate:"required"`
 	ContentText string `json:"content_text"`
 	VoiceURL    string `json:"voice_url"`
 	ImageURL    string `json:"image_url"`
@@ -50,18 +50,17 @@ func (h *Handler) SendMessage(
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req SendMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		if inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "ReceiverID" {
+			response.Err(
+				w, http.StatusBadRequest,
+				"missing_receiver", "receiver_id is required",
+			)
+			return
+		}
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",
-		)
-		return
-	}
-
-	if req.ReceiverID == "" {
-		response.Err(
-			w, http.StatusBadRequest,
-			"missing_receiver", "receiver_id is required",
 		)
 		return
 	}

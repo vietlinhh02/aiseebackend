@@ -51,10 +51,10 @@ func NewService(store adminStore, grant usageGranter) *Service {
 
 // ManualGrantInput is validated input for POST /api/admin/users/{user_id}/manual-grant.
 type ManualGrantInput struct {
-	UsageType string  `json:"usage_type"`
-	Quantity  float64 `json:"quantity"`
-	Unit      string  `json:"unit"`
-	Reason    string  `json:"reason"`
+	UsageType string  `json:"usage_type" validate:"required"`
+	Quantity  float64 `json:"quantity" validate:"gt=0"`
+	Unit      string  `json:"unit" validate:"required"`
+	Reason    string  `json:"reason" validate:"required"`
 }
 
 func (s *Service) ManualGrantUsage(

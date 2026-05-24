@@ -2,7 +2,6 @@ package care
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/tracking"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -164,7 +164,7 @@ func (h *Handler) ExportPDF(
 	}
 
 	var req ExportPDFRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}

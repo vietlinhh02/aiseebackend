@@ -2,7 +2,6 @@ package care
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/tracking"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -167,12 +167,17 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title string         `json:"title"`
+		Title string         `json:"title" validate:"required"`
 		DueAt *time.Time     `json:"due_at,omitempty"`
 		Meta  map[string]any `json:"metadata,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Title":
+			response.Err(w, http.StatusBadRequest, "invalid_body", "title is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	id, err := svc.CreateTask(r.Context(), requesterID, caredID, TaskCreateInput{
@@ -205,13 +210,18 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title  string         `json:"title"`
+		Title  string         `json:"title" validate:"required"`
 		DueAt  *time.Time     `json:"due_at,omitempty"`
 		Status string         `json:"status,omitempty"`
 		Meta   map[string]any `json:"metadata,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Title":
+			response.Err(w, http.StatusBadRequest, "invalid_body", "title is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	if err := svc.UpdateTask(r.Context(), requesterID, caredID, taskID, TaskUpdateInput{
@@ -278,7 +288,7 @@ func (h *Handler) PutPermissions(w http.ResponseWriter, r *http.Request) {
 	}
 	familyID := chi.URLParam(r, "family_id")
 	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
@@ -300,10 +310,15 @@ func (h *Handler) CoachQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Question string `json:"question"`
+		Question string `json:"question" validate:"required"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Question":
+			response.Err(w, http.StatusBadRequest, "invalid_body", "question is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	resp, err := svc.CoachQuery(r.Context(), requesterID, caredID, body.Question)

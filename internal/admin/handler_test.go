@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -359,6 +360,50 @@ func TestGetUserTimelineUsesRouteUserIDAndLimit(t *testing.T) {
 	}
 	if len(body.Events) != 1 || body.Events[0].ID != "track-1" {
 		t.Fatalf("events = %+v", body.Events)
+	}
+}
+
+func TestManualGrantRejectsMissingFields(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeAdminHandlerService{}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/users/user-1/manual-grant",
+		strings.NewReader(`{"usage_type":"","quantity":0,"reason":""}`),
+	)
+	req = withURLParam(req, "user_id", "user-1")
+	rec := httptest.NewRecorder()
+
+	NewHandler(svc).ManualGrant(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "usage_type, quantity") ||
+		!strings.Contains(rec.Body.String(), "reason are required") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestRecordTrackingEventRejectsMissingEventType(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeAdminHandlerService{}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/tracking/events",
+		strings.NewReader(`{"source":"admin","source_id":"evt-1"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	NewHandler(svc).RecordTrackingEvent(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "event_type is required") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
 	}
 }
 

@@ -1,12 +1,12 @@
 package supporter
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -65,7 +65,7 @@ func (h *Handler) Redeem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RedeemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}

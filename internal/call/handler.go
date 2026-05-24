@@ -1,13 +1,13 @@
 package call
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
 	"github.com/team-dang/aiseebackend/internal/user"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -48,8 +48,8 @@ func (h *Handler) GetToken(
 }
 
 type CreateRoomRequest struct {
-	CalleeID string `json:"callee_id"`
-	CallType string `json:"call_type"`
+	CalleeID string `json:"callee_id" validate:"required"`
+	CallType string `json:"call_type" validate:"required,oneof=voice video"`
 }
 
 func (h *Handler) CreateRoom(
@@ -57,27 +57,25 @@ func (h *Handler) CreateRoom(
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req CreateRoomRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_body", "Invalid request body",
-		)
-		return
-	}
-
-	if req.CalleeID == "" {
-		response.Err(
-			w, http.StatusBadRequest,
-			"missing_callee", "callee_id is required",
-		)
-		return
-	}
-	if req.CallType != "voice" && req.CallType != "video" {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_call_type",
-			"call_type must be 'voice' or 'video'",
-		)
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "CalleeID":
+			response.Err(
+				w, http.StatusBadRequest,
+				"missing_callee", "callee_id is required",
+			)
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "CallType":
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_call_type",
+				"call_type must be 'voice' or 'video'",
+			)
+		default:
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "Invalid request body",
+			)
+		}
 		return
 	}
 
@@ -150,7 +148,7 @@ func writeQuotaError(w http.ResponseWriter, err error) bool {
 }
 
 type EndRoomRequest struct {
-	RoomName string `json:"room_name"`
+	RoomName string `json:"room_name" validate:"required"`
 }
 
 func (h *Handler) EndRoom(
@@ -158,7 +156,7 @@ func (h *Handler) EndRoom(
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req EndRoomRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",

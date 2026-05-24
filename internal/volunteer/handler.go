@@ -1,17 +1,27 @@
 package volunteer
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
 // Handler exposes volunteer REST endpoints.
 type Handler struct {
 	svc *Service
+}
+
+type setAvailabilityRequest struct {
+	Available bool `json:"available"`
+}
+
+type rateRequest struct {
+	VolunteerID string `json:"volunteer_id"`
+	MatchID     string `json:"match_id"`
+	Score       int16  `json:"score" validate:"min=1,max=5"`
 }
 
 // NewHandler creates a volunteer Handler.
@@ -28,8 +38,8 @@ func (h *Handler) Register(
 	var body struct {
 		Languages []string `json:"languages"`
 	}
-	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
 			response.Err(
 				w, http.StatusBadRequest,
 				"invalid_body", "Invalid request body",
@@ -87,10 +97,8 @@ func (h *Handler) SetAvailability(
 ) {
 	userID := middleware.UserIDFromContext(r.Context())
 
-	var body struct {
-		Available bool `json:"available"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var body setAvailabilityRequest
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",
@@ -159,24 +167,20 @@ func (h *Handler) Rate(
 ) {
 	raterID := middleware.UserIDFromContext(r.Context())
 
-	var body struct {
-		VolunteerID string `json:"volunteer_id"`
-		MatchID     string `json:"match_id"`
-		Score       int16  `json:"score"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_body", "Invalid request body",
-		)
-		return
-	}
-
-	if body.Score < 1 || body.Score > 5 {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_score", "Score must be 1-5",
-		)
+	var body rateRequest
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Score":
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_score", "Score must be 1-5",
+			)
+		default:
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "Invalid request body",
+			)
+		}
 		return
 	}
 

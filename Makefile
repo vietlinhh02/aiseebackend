@@ -1,4 +1,4 @@
-.PHONY: dev stop db-up db-down migrate migrate-down generate test lint build clean logs
+.PHONY: dev stop db-up db-down migrate migrate-down generate generate-internalapi generate-all test lint build clean logs
 
 # === Development ===
 
@@ -55,6 +55,12 @@ generate: ## Run sqlc codegen
 	@command -v sqlc > /dev/null 2>&1 || { echo "Install: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest"; exit 1; }
 	sqlc generate
 	@echo "Generated internal/dbgen/"
+
+generate-internalapi: ## Run OpenAPI internal client/types codegen
+	go generate ./internal/internalapi
+	@echo "Generated internal/internalapi/"
+
+generate-all: generate generate-internalapi ## Run all backend codegen
 
 # === Testing ===
 

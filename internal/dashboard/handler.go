@@ -1,12 +1,12 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -144,18 +144,20 @@ func (h *Handler) CreateMedication(
 	}
 
 	var req CreateMedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_body", "Invalid request body",
-		)
-		return
-	}
-	if req.Name == "" || req.Dosage == "" {
-		response.Err(
-			w, http.StatusBadRequest,
-			"validation", "name and dosage are required",
-		)
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate &&
+			(inputErr.Field == "Name" || inputErr.Field == "Dosage"):
+			response.Err(
+				w, http.StatusBadRequest,
+				"validation", "name and dosage are required",
+			)
+		default:
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "Invalid request body",
+			)
+		}
 		return
 	}
 	if req.Frequency == "" {
@@ -189,7 +191,7 @@ func (h *Handler) UpdateMedication(
 
 	medID := chi.URLParam(r, "med_id")
 	var req UpdateMedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",

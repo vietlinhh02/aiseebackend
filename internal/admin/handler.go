@@ -2,15 +2,14 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/billing"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -276,8 +275,17 @@ func (h *Handler) GetUserTimeline(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) RecordTrackingEvent(w http.ResponseWriter, r *http.Request) {
 	var input AdminTrackingEventInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if inputErr := httpinput.DecodeAndValidate(r, &input); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "EventType":
+			response.Err(w, http.StatusBadRequest, "tracking_event_invalid", "event_type is required")
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Source":
+			response.Err(w, http.StatusBadRequest, "tracking_event_invalid", "source is required")
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "SourceID":
+			response.Err(w, http.StatusBadRequest, "tracking_event_invalid", "source_id is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	event, err := h.svc.RecordAdminTrackingEvent(
@@ -296,16 +304,16 @@ func (h *Handler) ManualGrant(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "user_id")
 
 	var req ManualGrantInput
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
-	}
-	if req.UsageType == "" || req.Quantity <= 0 || req.Reason == "" {
-		response.Err(w, http.StatusBadRequest, "validation", "usage_type, quantity (>0), and reason are required")
-		return
-	}
-	if strings.TrimSpace(req.Unit) == "" {
-		response.Err(w, http.StatusBadRequest, "validation", "unit is required")
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate &&
+			(inputErr.Field == "UsageType" || inputErr.Field == "Quantity" || inputErr.Field == "Reason"):
+			response.Err(w, http.StatusBadRequest, "validation", "usage_type, quantity (>0), and reason are required")
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Unit":
+			response.Err(w, http.StatusBadRequest, "validation", "unit is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 
@@ -388,19 +396,20 @@ func (h *Handler) GetUserInvoices(w http.ResponseWriter, r *http.Request) {
 }
 
 type refundNoteBody struct {
-	Note string `json:"note"`
+	Note string `json:"note" validate:"required"`
 }
 
 func (h *Handler) PostPaymentRefundNote(w http.ResponseWriter, r *http.Request) {
 	paymentID := chi.URLParam(r, "payment_id")
 	adminID := middleware.UserIDFromContext(r.Context())
 	var body refundNoteBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
-	}
-	if strings.TrimSpace(body.Note) == "" {
-		response.Err(w, http.StatusBadRequest, "validation", "note is required")
+	if inputErr := httpinput.DecodeAndValidate(r, &body); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Note":
+			response.Err(w, http.StatusBadRequest, "validation", "note is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	if err := h.svc.InsertBillingRefundNote(r.Context(), paymentID, adminID, body.Note); err != nil {

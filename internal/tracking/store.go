@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+	"github.com/team-dang/aiseebackend/pkg/pgutil"
 )
 
 type PgxStore struct {
-	db dbgen.DBTX
+	queries *dbgen.Queries
 }
 
 func NewPgxStore(db dbgen.DBTX) *PgxStore {
-	return &PgxStore{db: db}
+	return &PgxStore{queries: dbgen.New(db)}
 }
 
 func (s *PgxStore) RecordEvent(ctx context.Context, input EventInput) (Event, error) {
@@ -23,55 +24,61 @@ func (s *PgxStore) RecordEvent(ctx context.Context, input EventInput) (Event, er
 		return Event{}, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	var actorID *string
-	if input.ActorID != "" {
-		actorID = &input.ActorID
+	userID, err := pgutil.ParsePgUUID(input.UserID)
+	if err != nil {
+		return Event{}, fmt.Errorf("parse user_id: %w", err)
 	}
 
-	row := s.db.QueryRow(ctx, `
-		INSERT INTO tracking_events (
-			user_id, actor_id, event_type, category, severity, source, source_id,
-			status, duration_ms, occurred_at, metadata
-		)
-		VALUES (
-			$1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11
-		)
-		RETURNING
-			id::text, user_id::text, COALESCE(actor_id::text, ''), event_type,
-			category, severity, source, source_id, status,
-			COALESCE(duration_ms, 0), occurred_at, metadata
-	`, input.UserID, actorID, input.EventType, input.Category, input.Severity,
-		input.Source, input.SourceID, input.Status, input.DurationMS,
-		input.OccurredAt, metadata)
+	var actorID pgtype.UUID
+	if input.ActorID != "" {
+		actorID, err = pgutil.ParsePgUUID(input.ActorID)
+		if err != nil {
+			return Event{}, fmt.Errorf("parse actor_id: %w", err)
+		}
+	}
 
-	event, err := scanEvent(row)
+	durationMS := pgtype.Int8{}
+	if input.DurationMS > 0 {
+		durationMS = pgtype.Int8{Int64: input.DurationMS, Valid: true}
+	}
+
+	record, err := s.queries.CreateTrackingEvent(ctx, dbgen.CreateTrackingEventParams{
+		UserID:     userID,
+		ActorID:    actorID,
+		EventType:  input.EventType,
+		Category:   input.Category,
+		Severity:   input.Severity,
+		Source:     input.Source,
+		SourceID:   input.SourceID,
+		Status:     input.Status,
+		DurationMs: durationMS,
+		OccurredAt: pgtype.Timestamptz{Time: input.OccurredAt, Valid: true},
+		Metadata:   metadata,
+	})
 	if err != nil {
 		return Event{}, fmt.Errorf("record tracking event: %w", err)
 	}
-	return event, nil
+	return trackingEventFromDB(record), nil
 }
 
-func scanEvent(row pgx.Row) (Event, error) {
-	var event Event
-	var metadata []byte
-	if err := row.Scan(
-		&event.ID,
-		&event.UserID,
-		&event.ActorID,
-		&event.EventType,
-		&event.Category,
-		&event.Severity,
-		&event.Source,
-		&event.SourceID,
-		&event.Status,
-		&event.DurationMS,
-		&event.OccurredAt,
-		&metadata,
-	); err != nil {
-		return Event{}, err
+func trackingEventFromDB(record dbgen.TrackingEvent) Event {
+	event := Event{
+		ID:         pgutil.PgUUIDToString(record.ID),
+		UserID:     pgutil.PgUUIDToString(record.UserID),
+		ActorID:    pgutil.PgUUIDToString(record.ActorID),
+		EventType:  record.EventType,
+		Category:   record.Category,
+		Severity:   record.Severity,
+		Source:     record.Source,
+		SourceID:   record.SourceID,
+		Status:     record.Status,
+		OccurredAt: record.OccurredAt.Time.UTC(),
 	}
-	if len(metadata) > 0 {
-		_ = json.Unmarshal(metadata, &event.Metadata)
+	if record.DurationMs.Valid {
+		event.DurationMS = record.DurationMs.Int64
 	}
-	return event, nil
+	if len(record.Metadata) > 0 {
+		_ = json.Unmarshal(record.Metadata, &event.Metadata)
+	}
+	return event
 }

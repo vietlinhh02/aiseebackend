@@ -161,9 +161,9 @@ type UserTimelineEvent struct {
 
 type AdminTrackingEventInput struct {
 	UserID     string         `json:"user_id,omitempty"`
-	EventType  string         `json:"event_type"`
-	Source     string         `json:"source"`
-	SourceID   string         `json:"source_id"`
+	EventType  string         `json:"event_type" validate:"required"`
+	Source     string         `json:"source" validate:"required"`
+	SourceID   string         `json:"source_id" validate:"required"`
 	Status     string         `json:"status,omitempty"`
 	DurationMS int64          `json:"duration_ms,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`

@@ -1,12 +1,12 @@
 package user
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/team-dang/aiseebackend/internal/middleware"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -60,7 +60,7 @@ type CreateInviteRequest struct {
 func (h *Handler) CreateFamilyLink(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req CreateInviteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
@@ -94,14 +94,19 @@ func (h *Handler) RevokeFamilyInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 type JoinFamilyRequest struct {
-	InviteCode string `json:"invite_code"`
+	InviteCode string `json:"invite_code" validate:"required"`
 }
 
 func (h *Handler) JoinFamily(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req JoinFamilyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "InviteCode":
+			response.Err(w, http.StatusBadRequest, "invite_invalid", "invite_code is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	if err := h.service.JoinFamily(r.Context(), userID, req.InviteCode); err != nil {
@@ -143,18 +148,19 @@ func (h *Handler) LeaveGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 type TransferGroupOwnershipRequest struct {
-	TargetUserID string `json:"target_user_id"`
+	TargetUserID string `json:"target_user_id" validate:"required"`
 }
 
 func (h *Handler) TransferGroupOwnership(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req TransferGroupOwnershipRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
-	}
-	if req.TargetUserID == "" {
-		response.Err(w, http.StatusBadRequest, "missing_target_user", "target_user_id is required")
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "TargetUserID":
+			response.Err(w, http.StatusBadRequest, "missing_target_user", "target_user_id is required")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 	if err := h.service.TransferGroupOwnership(r.Context(), userID, req.TargetUserID); err != nil {
@@ -195,7 +201,7 @@ type UpdateMeRequest struct {
 func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var req UpdateMeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
 		response.Err(
 			w, http.StatusBadRequest,
 			"invalid_body", "Invalid request body",

@@ -23,14 +23,15 @@ import (
 	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/internal/user"
 	"github.com/team-dang/aiseebackend/internal/volunteer"
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/i18n"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
 type ToolCallRequest struct {
-	Tool   string         `json:"tool"`
-	UserID string         `json:"user_id"`
+	Tool   string         `json:"tool" validate:"required"`
+	UserID string         `json:"user_id" validate:"required"`
 	Params map[string]any `json:"params"`
 }
 
@@ -88,11 +89,24 @@ func (h *Handler) HandleToolCall(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	var req ToolCallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Err(
-			w, http.StatusBadRequest,
-			"invalid_body", "Invalid request body",
-		)
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Tool":
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "tool is required",
+			)
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "UserID":
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "user_id is required",
+			)
+		default:
+			response.Err(
+				w, http.StatusBadRequest,
+				"invalid_body", "Invalid request body",
+			)
+		}
 		return
 	}
 

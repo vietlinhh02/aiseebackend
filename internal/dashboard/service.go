@@ -89,8 +89,8 @@ type LocationResponse struct {
 }
 
 type CreateMedRequest struct {
-	Name      string   `json:"name"`
-	Dosage    string   `json:"dosage"`
+	Name      string   `json:"name" validate:"required"`
+	Dosage    string   `json:"dosage" validate:"required"`
 	Times     []string `json:"times"`
 	Frequency string   `json:"frequency"`
 }

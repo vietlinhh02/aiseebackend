@@ -3,13 +3,13 @@ package tracking
 import "time"
 
 type EventInput struct {
-	UserID     string         `json:"user_id"`
+	UserID     string         `json:"user_id" validate:"required"`
 	ActorID    string         `json:"actor_id,omitempty"`
-	EventType  string         `json:"event_type"`
-	Category   string         `json:"category"`
+	EventType  string         `json:"event_type" validate:"required"`
+	Category   string         `json:"category" validate:"required"`
 	Severity   string         `json:"severity,omitempty"`
-	Source     string         `json:"source"`
-	SourceID   string         `json:"source_id"`
+	Source     string         `json:"source" validate:"required"`
+	SourceID   string         `json:"source_id" validate:"required"`
 	Status     string         `json:"status,omitempty"`
 	DurationMS int64          `json:"duration_ms,omitempty"`
 	OccurredAt time.Time      `json:"occurred_at,omitempty"`

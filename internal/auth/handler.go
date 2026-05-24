@@ -1,10 +1,10 @@
 package auth
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
+	"github.com/team-dang/aiseebackend/pkg/httpinput"
 	"github.com/team-dang/aiseebackend/pkg/response"
 )
 
@@ -17,27 +17,24 @@ func NewHandler(service *Service) *Handler {
 }
 
 type GoogleAuthRequest struct {
-	IDToken string `json:"id_token"`
-	Role    string `json:"role"`
+	IDToken string `json:"id_token" validate:"required"`
+	Role    string `json:"role" validate:"required,oneof=user family"`
 }
 
 func (h *Handler) GoogleAuth(w http.ResponseWriter, r *http.Request) {
 	var req GoogleAuthRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Warn("auth_google_invalid_body", "error", err)
-		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
-		return
-	}
-
-	if req.IDToken == "" {
-		slog.Warn("auth_google_missing_token")
-		response.Err(w, http.StatusBadRequest, "missing_token", "id_token is required")
-		return
-	}
-
-	if req.Role != "user" && req.Role != "family" {
-		slog.Warn("auth_google_invalid_role", "role", req.Role)
-		response.Err(w, http.StatusBadRequest, "invalid_role", "role must be 'user' or 'family'")
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		slog.Warn("auth_google_invalid_body", "error", inputErr)
+		switch {
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "IDToken":
+			slog.Warn("auth_google_missing_token")
+			response.Err(w, http.StatusBadRequest, "missing_token", "id_token is required")
+		case inputErr.Kind == httpinput.ErrorKindValidate && inputErr.Field == "Role":
+			slog.Warn("auth_google_invalid_role", "role", req.Role)
+			response.Err(w, http.StatusBadRequest, "invalid_role", "role must be 'user' or 'family'")
+		default:
+			response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		}
 		return
 	}
 
@@ -53,13 +50,13 @@ func (h *Handler) GoogleAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refresh_token" validate:"required"`
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req RefreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Warn("auth_refresh_invalid_body", "error", err)
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		slog.Warn("auth_refresh_invalid_body", "error", inputErr)
 		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
 		return
 	}
