@@ -15,12 +15,12 @@ import (
 
 const (
 	coinsPerAd          = 100
-	maxAdsPerDay        = 10
+	maxAdsPerDay        = 50
 	communityRedeemRate = 100
 )
 
 var (
-	ErrDailyAdLimitReached   = errors.New("đã đạt giới hạn quảng cáo hôm nay (10/ngày)")
+	ErrDailyAdLimitReached = errors.New("đã đạt giới hạn quảng cáo hôm nay (50/ngày)")
 	ErrInsufficientBalance   = errors.New("số dư không đủ")
 	ErrInvalidRecipientID    = errors.New("mã người nhận không hợp lệ")
 	ErrReferralSelfRefer     = errors.New("không thể tự giới thiệu chính mình")
