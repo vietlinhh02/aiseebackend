@@ -65,6 +65,9 @@ func TestIsGenericSupportRequest(t *testing.T) {
 	cases := map[string]bool{
 		"":                 true,
 		"nguoi ho tro":     true,
+		"người hỗ trợ":     true,
+		"người giúp":       true,
+		"tình nguyện viên": true,
 		"tinh nguyen vien": true,
 		"support":          true,
 		"Me":               false,

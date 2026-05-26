@@ -2,6 +2,7 @@ package call
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -71,7 +72,7 @@ func (s *Service) GetUserToken(
 			UserID:    userID,
 			UsageType: billing.UsageAIMinutes,
 			Quantity:  1,
-		}); err != nil {
+		}); err != nil && !errors.Is(err, billing.ErrNoBillingCareGroup) {
 			return "", err
 		}
 	}

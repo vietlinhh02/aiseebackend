@@ -50,6 +50,18 @@ SELECT
     COALESCE((SELECT SUM(amount) FROM supporter_transactions WHERE type = 'redeem'), 0)::INTEGER AS total_ai_turns_gifted,
     COALESCE((SELECT COUNT(DISTINCT user_id) FROM supporter_daily_ad_watches WHERE watch_date > CURRENT_DATE - INTERVAL '30 days'), 0)::INTEGER AS active_supporters;
 
+-- name: ListRecentCommunitySupporters :many
+SELECT
+    u.id,
+    COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+    u.avatar_url
+FROM supporter_daily_ad_watches adw
+JOIN users u ON u.id = adw.user_id
+WHERE adw.watch_date > CURRENT_DATE - INTERVAL '30 days'
+GROUP BY u.id, u.display_name, u.email, u.avatar_url
+ORDER BY MAX(adw.watch_date) DESC, COALESCE(NULLIF(u.display_name, ''), u.email)
+LIMIT $1;
+
 -- name: GetTotalAITurnsGiftedByUser :one
 SELECT COALESCE(SUM(amount), 0)::INTEGER AS total
 FROM supporter_transactions

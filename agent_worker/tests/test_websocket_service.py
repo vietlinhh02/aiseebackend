@@ -117,6 +117,10 @@ class FakeBackend:
         )
         return {"status": "committed"}
 
+    async def record_ai_cost(self, **kwargs):
+        self.calls.append(("record_ai_cost", kwargs))
+        return {"status": "recorded"}
+
 
 class FakeGeminiSession:
     def __init__(self, messages=None):
@@ -298,12 +302,17 @@ async def test_websocket_service_tracks_ai_minutes_only_while_audio_stream_activ
     await websocket.finish()
     await task
 
-    assert [call[0] for call in backend.calls] == [
+    usage_calls = [
+        call
+        for call in backend.calls
+        if call[0] in {"start_usage_session", "commit_usage_session"}
+    ]
+    assert [call[0] for call in usage_calls] == [
         "start_usage_session",
         "commit_usage_session",
     ]
-    start = backend.calls[0]
-    commit = backend.calls[1]
+    start = usage_calls[0]
+    commit = usage_calls[1]
     assert start[1:6] == (
         "user-1",
         "ai_minutes",
@@ -317,6 +326,9 @@ async def test_websocket_service_tracks_ai_minutes_only_while_audio_stream_activ
     assert commit[1:6] == start[1:6]
     assert commit[6] == start[6]
     assert commit[7] >= commit[6]
+    cost_calls = [call for call in backend.calls if call[0] == "record_ai_cost"]
+    assert len(cost_calls) == 1
+    assert cost_calls[0][1]["pricing_version"]
 
 
 @pytest.mark.anyio
@@ -340,7 +352,11 @@ async def test_websocket_service_uses_distinct_usage_source_ids_for_repeated_wak
     await websocket.finish()
     await task
 
-    source_ids = [call[5] for call in backend.calls]
+    source_ids = [
+        call[5]
+        for call in backend.calls
+        if call[0] in {"start_usage_session", "commit_usage_session"}
+    ]
     assert source_ids == [
         "ai-repeat:audio:1",
         "ai-repeat:audio:1",

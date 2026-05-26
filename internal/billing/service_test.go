@@ -14,6 +14,7 @@ type fakeStore struct {
 	activeCareGroupSubs      []Subscription
 	providerRefSubscription  *Subscription
 	careGroup                CareGroupSummary
+	noCareGroup              bool
 	careGroupInput           BillingOverviewInput
 	caredUserIDs             []string
 	events                   []SubscriptionEvent
@@ -65,6 +66,9 @@ func (f *fakeStore) DefaultCareGroup(
 	_ context.Context,
 	userID string,
 ) (CareGroupSummary, error) {
+	if f.noCareGroup {
+		return CareGroupSummary{}, ErrNoBillingCareGroup
+	}
 	if f.careGroup.ID != "" {
 		return f.careGroup, nil
 	}
@@ -94,6 +98,9 @@ func (f *fakeStore) CareGroupForBilling(
 	input BillingOverviewInput,
 ) (CareGroupSummary, error) {
 	f.careGroupInput = input
+	if f.noCareGroup {
+		return CareGroupSummary{}, ErrNoBillingCareGroup
+	}
 	if f.careGroup.ID != "" {
 		return f.careGroup, nil
 	}
@@ -1034,6 +1041,35 @@ func TestServiceCommitUsageSessionCalculatesMinutes(t *testing.T) {
 	}
 	if len(store.commits) != 1 || store.commits[0].Quantity != 10.34 {
 		t.Fatalf("unexpected commit input: %+v", store.commits)
+	}
+}
+
+func TestServiceCommitUsageSessionAllowsStandaloneUserWithoutCareGroup(t *testing.T) {
+	store := &fakeStore{noCareGroup: true}
+	svc := NewService(store)
+	start := time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Minute)
+
+	record, err := svc.CommitUsageSession(
+		context.Background(),
+		CommitUsageSessionInput{
+			UserID:    "00000000-0000-0000-0000-000000000789",
+			UsageType: UsageAIMinutes,
+			Unit:      "minutes",
+			Source:    "assistant_ws",
+			SourceID:  "ai-standalone:audio:1",
+			StartedAt: start,
+			EndedAt:   end,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CommitUsageSession() error: %v", err)
+	}
+	if record.Quantity != 2 {
+		t.Fatalf("want 2 committed minutes, got %.2f", record.Quantity)
+	}
+	if len(store.commits) != 1 {
+		t.Fatalf("commit writes = %d, want 1", len(store.commits))
 	}
 }
 

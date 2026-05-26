@@ -206,6 +206,7 @@ func main() {
 	volService := volunteer.NewService(
 		queries, rdb, lkClient, pusher, billingService,
 	)
+	volService.SetRealtimeHub(chatHub)
 	volHandler := volunteer.NewHandler(volService)
 
 	supporterService := supporter.NewService(pool)

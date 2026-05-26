@@ -44,9 +44,16 @@ type PersonalStats struct {
 }
 
 type CommunityStats struct {
-	TotalCaredUsers    int32 `json:"total_cared_users"`
-	TotalAITurnsGifted int32 `json:"total_ai_turns_gifted"`
-	ActiveSupporters   int32 `json:"active_supporters"`
+	TotalCaredUsers    int32                `json:"total_cared_users"`
+	TotalAITurnsGifted int32                `json:"total_ai_turns_gifted"`
+	ActiveSupporters   int32                `json:"active_supporters"`
+	Supporters         []CommunitySupporter `json:"supporters"`
+}
+
+type CommunitySupporter struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 }
 
 type OverviewResponse struct {
@@ -92,6 +99,22 @@ func (s *Service) GetOverview(ctx context.Context, userID pgtype.UUID) (*Overvie
 		return nil, err
 	}
 
+	recentSupporters, err := s.queries.ListRecentCommunitySupporters(ctx, 5)
+	if err != nil {
+		return nil, err
+	}
+	supporters := make([]CommunitySupporter, 0, len(recentSupporters))
+	for _, row := range recentSupporters {
+		supporter := CommunitySupporter{
+			ID:          row.ID.String(),
+			DisplayName: row.DisplayName,
+		}
+		if row.AvatarUrl.Valid {
+			supporter.AvatarURL = row.AvatarUrl.String
+		}
+		supporters = append(supporters, supporter)
+	}
+
 	return &OverviewResponse{
 		Personal: PersonalStats{
 			SupportedPeopleCount: supportedCount,
@@ -105,6 +128,7 @@ func (s *Service) GetOverview(ctx context.Context, userID pgtype.UUID) (*Overvie
 			TotalCaredUsers:    community.TotalCaredUsers,
 			TotalAITurnsGifted: community.TotalAiTurnsGifted,
 			ActiveSupporters:   community.ActiveSupporters,
+			Supporters:         supporters,
 		},
 	}, nil
 }

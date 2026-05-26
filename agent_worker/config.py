@@ -1,8 +1,10 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
+DEFAULT_AI_COST_PRICING_VERSION = "gemini-live-estimated-v1"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
@@ -34,7 +36,10 @@ class Settings(BaseSettings):
         alias="GEMINI_GOOGLE_SEARCH_ENABLED",
     )
 
-    ai_cost_pricing_version: str = Field("", alias="AI_COST_PRICING_VERSION")
+    ai_cost_pricing_version: str = Field(
+        DEFAULT_AI_COST_PRICING_VERSION,
+        alias="AI_COST_PRICING_VERSION",
+    )
 
     exa_api_key: str = Field("", alias="EXA_API_KEY")
     exa_search_url: str = Field("https://api.exa.ai/search", alias="EXA_SEARCH_URL")
@@ -43,6 +48,13 @@ class Settings(BaseSettings):
     ai_transport: str = Field("websocket", alias="AI_TRANSPORT")
     assistant_ws_host: str = Field("0.0.0.0", alias="ASSISTANT_WS_HOST")
     assistant_ws_port: int = Field(8765, alias="ASSISTANT_WS_PORT")
+
+    @field_validator("ai_cost_pricing_version", mode="before")
+    @classmethod
+    def default_ai_cost_pricing_version(cls, value):
+        if value is None or str(value).strip() == "":
+            return DEFAULT_AI_COST_PRICING_VERSION
+        return value
 
 
 @lru_cache(maxsize=1)

@@ -167,6 +167,45 @@ func (q *Queries) InsertSupporterTransaction(ctx context.Context, arg InsertSupp
 	return err
 }
 
+const listRecentCommunitySupporters = `-- name: ListRecentCommunitySupporters :many
+SELECT
+    u.id,
+    COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
+    u.avatar_url
+FROM supporter_daily_ad_watches adw
+JOIN users u ON u.id = adw.user_id
+WHERE adw.watch_date > CURRENT_DATE - INTERVAL '30 days'
+GROUP BY u.id, u.display_name, u.email, u.avatar_url
+ORDER BY MAX(adw.watch_date) DESC, COALESCE(NULLIF(u.display_name, ''), u.email)
+LIMIT $1
+`
+
+type ListRecentCommunitySupportersRow struct {
+	ID          pgtype.UUID `json:"id"`
+	DisplayName string      `json:"display_name"`
+	AvatarUrl   pgtype.Text `json:"avatar_url"`
+}
+
+func (q *Queries) ListRecentCommunitySupporters(ctx context.Context, limit int32) ([]ListRecentCommunitySupportersRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCommunitySupporters, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentCommunitySupportersRow{}
+	for rows.Next() {
+		var i ListRecentCommunitySupportersRow
+		if err := rows.Scan(&i.ID, &i.DisplayName, &i.AvatarUrl); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertSupporterWallet = `-- name: UpsertSupporterWallet :exec
 INSERT INTO supporter_wallets (user_id, balance, total_earned, updated_at)
 VALUES ($1, $2, $2, now())

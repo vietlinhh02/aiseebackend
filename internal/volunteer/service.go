@@ -2,17 +2,19 @@ package volunteer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	lkproto "github.com/livekit/protocol/livekit"
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/billing"
+	"github.com/team-dang/aiseebackend/internal/chat"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
 	"github.com/team-dang/aiseebackend/pkg/i18n"
-	lk "github.com/team-dang/aiseebackend/pkg/livekit"
 	"github.com/team-dang/aiseebackend/pkg/pgutil"
 	"github.com/team-dang/aiseebackend/pkg/push"
 )
@@ -82,9 +84,32 @@ type AssistantMatchResult struct {
 type Service struct {
 	q       Querier
 	rdb     *redis.Client
-	lk      *lk.Client
+	lk      liveKitClient
 	pusher  *push.Pusher
 	billing usageService
+	hub     RealtimeHub
+
+	answerTimeout      time.Duration
+	answerPollInterval time.Duration
+}
+
+type RealtimeHub interface {
+	IsOnline(userID string) bool
+	SendToUser(userID string, msg chat.WSMessage)
+}
+
+type liveKitClient interface {
+	CreateRoomWithTimeout(
+		ctx context.Context,
+		roomName string,
+		emptyTimeoutSec uint32,
+	) error
+	CreateToken(roomName, identity, name string) (string, error)
+	ListParticipants(
+		ctx context.Context,
+		roomName string,
+	) ([]*lkproto.ParticipantInfo, error)
+	DeleteRoom(ctx context.Context, roomName string) error
 }
 
 type usageService interface {
@@ -96,7 +121,7 @@ type usageService interface {
 func NewService(
 	q Querier,
 	rdb *redis.Client,
-	lkClient *lk.Client,
+	lkClient liveKitClient,
 	pusher *push.Pusher,
 	billingSvc ...usageService,
 ) *Service {
@@ -110,7 +135,14 @@ func NewService(
 		lk:      lkClient,
 		pusher:  pusher,
 		billing: usage,
+
+		answerTimeout:      30 * time.Second,
+		answerPollInterval: 5 * time.Second,
 	}
+}
+
+func (s *Service) SetRealtimeHub(hub RealtimeHub) {
+	s.hub = hub
 }
 
 // Register creates a new volunteer profile for the user.
@@ -200,7 +232,7 @@ func (s *Service) StartMatch(
 			UserID:    userID,
 			UsageType: billing.UsageVolunteerMatches,
 			Quantity:  1,
-		}); err != nil {
+		}); err != nil && !errors.Is(err, billing.ErrNoBillingCareGroup) {
 			return MatchResult{}, err
 		}
 	}
@@ -308,10 +340,14 @@ func (s *Service) matchLoop(userID, matchID string) {
 
 func (s *Service) waitForJoin(
 	ctx context.Context,
-	roomName, callerID string,
+	roomName, callerID, expectedParticipantID string,
 	timeout time.Duration,
 ) bool {
-	ticker := time.NewTicker(5 * time.Second)
+	pollInterval := s.answerPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	deadline := time.After(timeout)
 
@@ -332,8 +368,8 @@ func (s *Service) waitForJoin(
 				continue
 			}
 			for _, p := range participants {
-				if p.Identity != callerID &&
-					p.Identity != "" {
+				if p.Identity == expectedParticipantID &&
+					p.Identity != callerID {
 					return true
 				}
 			}
@@ -414,7 +450,7 @@ func (s *Service) createMatchUsage(
 			UserID:    userID,
 			UsageType: billing.UsageVolunteerMatches,
 			Quantity:  1,
-		}); err != nil {
+		}); err != nil && !errors.Is(err, billing.ErrNoBillingCareGroup) {
 			return "", err
 		}
 	}
@@ -476,27 +512,32 @@ func (s *Service) matchCandidates(
 		}, nil
 	}
 
-	roomName := "vol-" + matchID[:8]
-	if err := s.lk.CreateRoomWithTimeout(ctx, roomName, 300); err != nil {
-		return AssistantMatchResult{}, fmt.Errorf("create room: %w", err)
-	}
-
-	for _, candidate := range candidates {
+	for i, candidate := range candidates {
 		volunteerID := pgutil.PgUUIDToString(candidate.UserID)
+		roomName := volunteerRoomName(matchID, i)
+		if err := s.lk.CreateRoomWithTimeout(ctx, roomName, 300); err != nil {
+			return AssistantMatchResult{}, fmt.Errorf("create room: %w", err)
+		}
+
 		calleeToken, err := s.lk.CreateToken(roomName, volunteerID, candidate.DisplayName)
 		if err != nil {
 			slog.Error("matchCandidates: create volunteer token", "error", err, "volunteer_id", volunteerID)
+			s.deleteVolunteerRoom(ctx, roomName)
 			continue
 		}
 
 		s.sendVolunteerIncomingCall(ctx, user, userID, candidate, roomName, calleeToken, matchID, callType)
-		if !s.waitForJoin(ctx, roomName, userID, 30*time.Second) {
+		if !s.waitForJoin(ctx, roomName, userID, volunteerID, s.answerTimeout) {
+			s.notifyVolunteerCallEnded(ctx, candidate, roomName, userID, matchID, callType, "no_answer")
+			s.deleteVolunteerRoom(ctx, roomName)
 			continue
 		}
 
 		callerToken, err := s.lk.CreateToken(roomName, userID, user.DisplayName)
 		if err != nil {
 			slog.Error("matchCandidates: create caller token", "error", err)
+			s.notifyVolunteerCallEnded(ctx, candidate, roomName, userID, matchID, callType, "connect_failed")
+			s.deleteVolunteerRoom(ctx, roomName)
 			continue
 		}
 
@@ -513,10 +554,6 @@ func (s *Service) matchCandidates(
 			UserToken:     callerToken,
 			CallType:      callType,
 		}, nil
-	}
-
-	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
-		slog.Error("matchCandidates: delete room", "room", roomName, "error", err)
 	}
 
 	return AssistantMatchResult{
@@ -561,6 +598,68 @@ func (s *Service) sendVolunteerIncomingCall(
 		Type:  "voip",
 		Data:  payload,
 	})
+
+	volunteerID := pgutil.PgUUIDToString(candidate.UserID)
+	if s.hub != nil && s.hub.IsOnline(volunteerID) {
+		s.hub.SendToUser(volunteerID, chat.WSMessage{
+			Type:    "incoming_call",
+			Message: payload,
+		})
+	}
+}
+
+func (s *Service) notifyVolunteerCallEnded(
+	ctx context.Context,
+	candidate dbgen.GetAvailableVolunteersRow,
+	roomName string,
+	userID string,
+	matchID string,
+	callType string,
+	reason string,
+) {
+	payload := map[string]string{
+		"type":      "call_ended",
+		"room_name": roomName,
+		"ended_by":  userID,
+		"call_type": normalizeCallType(callType),
+		"match_id":  matchID,
+		"reason":    reason,
+	}
+
+	volunteerID := pgutil.PgUUIDToString(candidate.UserID)
+	if s.hub != nil && s.hub.IsOnline(volunteerID) {
+		s.hub.SendToUser(volunteerID, chat.WSMessage{
+			Type:    "call_ended",
+			Message: payload,
+		})
+	}
+	if s.pusher == nil {
+		return
+	}
+	s.pusher.Send(ctx, push.UserTokens{
+		FcmToken:      candidate.FcmToken,
+		ApnsToken:     candidate.ApnsToken,
+		ApnsVoipToken: candidate.ApnsVoipToken,
+	}, push.Notification{
+		Title: "AiSee",
+		Body:  i18n.T(i18n.FromUserSettings(candidate.Settings), "notif.call_ended.body"),
+		Type:  "voip",
+		Data:  payload,
+	})
+}
+
+func volunteerRoomName(matchID string, candidateIndex int) string {
+	prefix := matchID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return fmt.Sprintf("vol-%s-%d", prefix, candidateIndex+1)
+}
+
+func (s *Service) deleteVolunteerRoom(ctx context.Context, roomName string) {
+	if err := s.lk.DeleteRoom(ctx, roomName); err != nil {
+		slog.Error("matchCandidates: delete room", "room", roomName, "error", err)
+	}
 }
 
 func normalizeCallType(callType string) string {

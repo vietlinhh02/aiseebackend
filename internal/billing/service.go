@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -403,6 +404,9 @@ func (s *Service) enforceUsageSessionCommitQuota(
 		Quantity:    input.Quantity,
 	})
 	if err != nil {
+		if errors.Is(err, ErrNoBillingCareGroup) {
+			return input, nil
+		}
 		return CommitUsageSessionInput{}, err
 	}
 	if decision.Allowed {
