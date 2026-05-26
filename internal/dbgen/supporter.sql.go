@@ -167,6 +167,57 @@ func (q *Queries) InsertSupporterTransaction(ctx context.Context, arg InsertSupp
 	return err
 }
 
+const listRecentCommunityActivities = `-- name: ListRecentCommunityActivities :many
+SELECT
+    u.id AS actor_id,
+    COALESCE(NULLIF(u.display_name, ''), u.email) AS actor_display_name,
+    u.avatar_url AS actor_avatar_url,
+    st.type,
+    st.amount,
+    st.created_at AS occurred_at
+FROM supporter_transactions st
+JOIN users u ON u.id = st.user_id
+WHERE st.type IN ('watch_ad', 'redeem')
+ORDER BY st.created_at DESC
+LIMIT $1
+`
+
+type ListRecentCommunityActivitiesRow struct {
+	ActorID          pgtype.UUID        `json:"actor_id"`
+	ActorDisplayName string             `json:"actor_display_name"`
+	ActorAvatarUrl   pgtype.Text        `json:"actor_avatar_url"`
+	Type             string             `json:"type"`
+	Amount           int32              `json:"amount"`
+	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+}
+
+func (q *Queries) ListRecentCommunityActivities(ctx context.Context, limit int32) ([]ListRecentCommunityActivitiesRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCommunityActivities, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentCommunityActivitiesRow{}
+	for rows.Next() {
+		var i ListRecentCommunityActivitiesRow
+		if err := rows.Scan(
+			&i.ActorID,
+			&i.ActorDisplayName,
+			&i.ActorAvatarUrl,
+			&i.Type,
+			&i.Amount,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentCommunitySupporters = `-- name: ListRecentCommunitySupporters :many
 SELECT
     u.id,

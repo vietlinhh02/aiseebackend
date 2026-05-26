@@ -62,6 +62,20 @@ GROUP BY u.id, u.display_name, u.email, u.avatar_url
 ORDER BY MAX(adw.watch_date) DESC, COALESCE(NULLIF(u.display_name, ''), u.email)
 LIMIT $1;
 
+-- name: ListRecentCommunityActivities :many
+SELECT
+    u.id AS actor_id,
+    COALESCE(NULLIF(u.display_name, ''), u.email) AS actor_display_name,
+    u.avatar_url AS actor_avatar_url,
+    st.type,
+    st.amount,
+    st.created_at AS occurred_at
+FROM supporter_transactions st
+JOIN users u ON u.id = st.user_id
+WHERE st.type IN ('watch_ad', 'redeem')
+ORDER BY st.created_at DESC
+LIMIT $1;
+
 -- name: GetTotalAITurnsGiftedByUser :one
 SELECT COALESCE(SUM(amount), 0)::INTEGER AS total
 FROM supporter_transactions

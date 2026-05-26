@@ -209,7 +209,7 @@ func main() {
 	volService.SetRealtimeHub(chatHub)
 	volHandler := volunteer.NewHandler(volService)
 
-	supporterService := supporter.NewService(pool)
+	supporterService := supporter.NewService(pool, billingService)
 	supporterHandler := supporter.NewHandler(supporterService)
 
 	toolHandler := toolcall.NewHandler(
@@ -300,6 +300,8 @@ func main() {
 				r.Get("/supporter/overview", supporterHandler.GetOverview)
 				r.Post("/supporter/watch-ad", supporterHandler.WatchAd)
 				r.Post("/supporter/redeem", supporterHandler.Redeem)
+				r.Get("/supporter/referral-link", supporterHandler.GetReferralLink)
+				r.Post("/supporter/claim-referral", supporterHandler.ClaimReferral)
 			})
 
 			// Dashboard (family)

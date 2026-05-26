@@ -85,3 +85,44 @@ func (h *Handler) Redeem(w http.ResponseWriter, r *http.Request) {
 	}
 	response.JSON(w, http.StatusOK, result)
 }
+
+func (h *Handler) GetReferralLink(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	result, err := h.service.GetReferralLink(r.Context(), userID)
+	if err != nil {
+		slog.Warn("supporter_referral_link_failed", "error", err)
+		response.Err(w, http.StatusInternalServerError, "referral_link_failed", "Failed to get referral link")
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ClaimReferral(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	var uid pgtype.UUID
+	if err := uid.Scan(userID); err != nil {
+		response.Err(w, http.StatusInternalServerError, "invalid_user_id", "user ID parse failed")
+		return
+	}
+
+	var req ClaimReferralRequest
+	if inputErr := httpinput.DecodeAndValidate(r, &req); inputErr != nil {
+		response.Err(w, http.StatusBadRequest, "invalid_body", "Invalid request body")
+		return
+	}
+
+	result, err := h.service.ClaimReferral(r.Context(), uid, req)
+	if err != nil {
+		switch err {
+		case ErrReferralSelfRefer:
+			response.Err(w, http.StatusBadRequest, "self_referral", err.Error())
+		case ErrReferralAlreadyClaimed:
+			response.Err(w, http.StatusBadRequest, "already_claimed", err.Error())
+		default:
+			slog.Warn("supporter_claim_referral_failed", "error", err)
+			response.Err(w, http.StatusInternalServerError, "claim_referral_failed", "Failed to claim referral")
+		}
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
