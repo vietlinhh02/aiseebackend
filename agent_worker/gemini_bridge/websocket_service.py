@@ -414,6 +414,9 @@ class GeminiBridgeWebSocketService:
         transport = GeminiBridgeWebSocketTransport(websocket=websocket, log=self.log)
         session_context = await transport.read_session_init()
         tool_router = self._build_tool_router(transport, session_context)
+        tool_router.on_camera_state_change = lambda state: transport.emit_state(
+            AgentState.SPEAKING if state == "activated" else AgentState.IDLE,
+        )
         backend = tool_router.backend
         usage_tracker = AIUsageSessionTracker(
             backend=backend,

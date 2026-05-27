@@ -31,6 +31,7 @@ class ToolRouter:
     device_channel: DeviceCommandChannel | None = None
     local_participant: object | None = None
     search_client: object | None = None
+    on_camera_state_change: object | None = None
     _handlers: dict[str, ToolHandler] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -204,6 +205,12 @@ class ToolRouter:
         except Exception as exc:
             logger.warning("camera quota check failed (proceeding anyway): %s", exc)
         result = await self._device_request("enable_camera", {}, timeout=8.0)
+        # Thông báo cho app biết camera đã bật
+        if self.on_camera_state_change is not None:
+            try:
+                await self.on_camera_state_change("activated")
+            except Exception:
+                pass
         try:
             await self.backend.record_usage(
                 self._uid(),
@@ -223,7 +230,13 @@ class ToolRouter:
         return result
 
     async def _deactivate_camera(self, args: dict[str, Any]) -> dict[str, Any]:
-        return await self._device_request("disable_camera", {}, timeout=5.0)
+        result = await self._device_request("disable_camera", {}, timeout=5.0)
+        if self.on_camera_state_change is not None:
+            try:
+                await self.on_camera_state_change("deactivated")
+            except Exception:
+                pass
+        return result
 
     async def _backend_with_schedule_action(
         self,

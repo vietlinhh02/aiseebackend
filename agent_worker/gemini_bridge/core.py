@@ -99,7 +99,8 @@ class GeminiLiveSettings:
                 activity_handling=types.ActivityHandling.NO_INTERRUPTION,
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False,
-                    silence_duration_ms=300,
+                    silence_duration_ms=200,
+                    prefix_padding_ms=100,
                 ),
             ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),
@@ -145,6 +146,7 @@ class GeminiEventHandler:
     tool_router: ToolRouter
     audio_publisher: object
     state_publisher: object | None = None
+    _tool_call_in_progress: bool = False
 
     async def handle(self, session, message) -> None:
         server_content = getattr(message, "server_content", None)
@@ -159,6 +161,10 @@ class GeminiEventHandler:
         if tool_call is not None:
             await self._handle_tool_call(session, tool_call)
 
+    @property
+    def tool_call_in_progress(self) -> bool:
+        return self._tool_call_in_progress
+
     async def _handle_server_content(self, server_content) -> None:
         model_turn = getattr(server_content, "model_turn", None)
         parts = getattr(model_turn, "parts", None) or []
@@ -169,6 +175,8 @@ class GeminiEventHandler:
             data = getattr(inline_data, "data", None)
             mime_type = getattr(inline_data, "mime_type", "") or ""
             if data and mime_type.startswith("audio/"):
+                # Gemini respond audio → clear tool call flag, chuyển sang SPEAKING
+                self._tool_call_in_progress = False
                 if self.state_publisher is not None:
                     await self.state_publisher.publish(AgentState.SPEAKING)
                 await self.audio_publisher.publish_pcm(data)
@@ -182,6 +190,7 @@ class GeminiEventHandler:
             names,
         )
         if self.state_publisher is not None and function_calls:
+            self._tool_call_in_progress = True
             await self.state_publisher.publish(AgentState.THINKING)
         responses = await asyncio.gather(
             *(self._function_response_for_call(function_call) for function_call in function_calls)
@@ -194,6 +203,7 @@ class GeminiEventHandler:
                     pass
             await session.send_tool_response(function_responses=responses)
             logger.info("gemini tool_response sent count=%d", len(responses))
+            # Giữ THINKING — không publish IDLE ở đây
 
     async def _function_response_for_call(self, function_call) -> types.FunctionResponse:
         call_id = getattr(function_call, "id", None)
@@ -317,7 +327,9 @@ class GeminiTransportSession:
                     await handler.handle(gemini_session, message)
                     server_content = getattr(message, "server_content", None)
                     if server_content and getattr(server_content, "turn_complete", False):
-                        await state_publisher.publish(AgentState.IDLE)
+                        # Chỉ publish IDLE khi KHÔNG có tool call đang chạy
+                        if not handler.tool_call_in_progress:
+                            await state_publisher.publish(AgentState.IDLE)
             except genai_errors.APIError as exc:
                 if _is_normal_live_close(exc):
                     return
