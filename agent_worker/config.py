@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     internal_api_key: str = Field("your-internal-api-key", alias="INTERNAL_API_KEY")
 
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-live-2.5-flash-native-audio", alias="GEMINI_MODEL")
+    gemini_model: str = Field("gemini-3.1-flash-live-preview", alias="GEMINI_MODEL")
     gemini_voice: str = Field("Aoede", alias="GEMINI_VOICE")
     gemini_thinking_level: str = Field("low", alias="GEMINI_THINKING_LEVEL")
     gemini_audio_sample_rate: int = Field(16000, alias="GEMINI_AUDIO_SAMPLE_RATE")
