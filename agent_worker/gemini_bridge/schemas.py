@@ -28,20 +28,10 @@ ARRAY = types.Type.ARRAY
 
 TOOL_SPECS = (
     ToolSpec(
-        "make_voice_call",
-        "Goi dien thoai cho nguoi than theo ten hoac vai tro.",
-        {"contact_name": ParameterSpec(STRING, "Ten hoac quan he cua nguoi can goi.")},
-        ["contact_name"],
-    ),
-    ToolSpec(
-        "make_video_call",
-        "Goi video cho nguoi than theo ten hoac vai tro.",
-        {"contact_name": ParameterSpec(STRING, "Ten hoac quan he cua nguoi can goi.")},
-        ["contact_name"],
-    ),
-    ToolSpec(
         "send_chat_message",
-        "Gui tin nhan van ban cho nguoi than.",
+        "Gui tin nhan van ban cho nguoi than. "
+        "Chi goi khi user cung cap CA TEN/VAI TRO va CA NOI DUNG tin nhan. "
+        "Neu thieu 1 trong 2: hoi them.",
         {
             "contact_name": ParameterSpec(STRING, "Ten hoac quan he nguoi nhan."),
             "message": ParameterSpec(STRING, "Noi dung tin nhan."),
@@ -50,12 +40,16 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "read_unread_messages",
-        "Doc tin nhan chua doc, co the loc theo lien he.",
+        "Doc tin nhan chua doc. Goi ngay khi user muon doc tin, khong can xac nhan. "
+        "Co the loc theo ten lien he neu user chi dinh.",
         {"contact_name": ParameterSpec(STRING, "Ten lien he tuy chon.")},
     ),
     ToolSpec(
         "call_family_contact",
-        "Goi nguoi nha theo ten hoac vai tro, mo cuoc goi tren may nguoi dung va cho ket qua bat may hoac het gio.",
+        "Goi dien/video cho nguoi nha theo ten hoac vai tro (me, anh, chi, con...). "
+        "Chi goi khi user noi R TEN hoac VAI TRO. "
+        "Neu user chi noi 'goi dien' ma khong noi ten: hoi 'Ban muon goi cho ai?'. "
+        "Mo cuoc goi tren may nguoi dung va cho ket qua bat may hoac het gio.",
         {
             "contact_name": ParameterSpec(STRING, "Ten hoac quan he cua nguoi nha can goi."),
             "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
@@ -64,41 +58,52 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "call_support_contact",
-        "Goi nguoi ho tro. Neu co ten nguoi nha thi uu tien goi nguoi nha do; neu chung chung thi tim volunteer ho tro.",
+        "Goi nguoi ho tro/nguoi giup/tinh nguyen vien. "
+        "Neu user noi ten nguoi nha cu the → goi nguoi nha do. "
+        "Neu user noi chung chung 'nguoi ho tro', 'tinh nguyen vien', 'ai do giup' "
+        "→ tim volunteer tu backend. "
+        "Dung khi user noi 'goi nguoi giup', 'can ai do ho tro', 'goi tinh nguyen vien'.",
         {
-            "contact_name": ParameterSpec(STRING, "Ten nguoi nha tuy chon. Bo trong neu chi muon tim nguoi ho tro chung chung."),
+            "contact_name": ParameterSpec(STRING, "Ten nguoi nha tuy chon. Bo trong de tim volunteer."),
             "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
         },
     ),
     ToolSpec(
         "list_family_contacts",
-        "Kiem tra realtime xem nguoi dung da lien ket gia dinh chua va liet ke cac lien he hien co.",
+        "Kiem tra realtime xem nguoi dung da lien ket gia dinh chua va liet ke cac lien he. "
+        "Goi khi user hoi 'co ai lien ket chua', 'co nhung ai', hoac truoc khi goi nguoi than "
+        "de biet danh sach hien co.",
     ),
     ToolSpec(
         "activate_camera",
-        "Bat/mo camera chi sau khi user noi ro yeu cau xem qua camera "
-        "hoac da dong y ro rang sau cau hoi xac nhan.",
+        "Bat camera de AI nhin qua may anh nguoi dung. "
+        "CHI GOI khi: (1) user noi ro 'mo camera', 'bat camera', 'xem giup', 'nhin giup' "
+        "→ consent_source=explicit_request; HOAC (2) user da dong y ro rang sau khi duoc hoi "
+        "→ consent_source=explicit_confirmation. "
+        "KHONG GOI khi user noi mo ho nhu 'cai nay la gi', 'doc cai nay'.",
         {
             "reason": ParameterSpec(STRING, "Ly do can bat camera."),
             "consent_phrase": ParameterSpec(
                 STRING,
-                "Cum tu user vua noi de cho phep mo camera, giu gan nguyen van nhat co the.",
+                "Cum tu user vua noi de cho phep mo camera, giu gan nguyen van.",
             ),
             "consent_source": ParameterSpec(
                 STRING,
-                "explicit_request neu user tu noi mo/xem camera; explicit_confirmation neu user vua dong y sau khi duoc hoi.",
+                "explicit_request neu user tu noi mo/xem; explicit_confirmation neu user dong y sau hoi.",
             ),
         },
         ["reason", "consent_phrase", "consent_source"],
     ),
     ToolSpec(
         "deactivate_camera",
-        "Tat/dung/dong camera khi nguoi dung noi tat camera, tat di, dung camera, "
-        "thoi nhin, hoac quay ve che do am thanh.",
+        "Tat camera, quay ve che do am thanh. "
+        "Goi ngay khi user noi 'tat camera', 'thoi', 'dung', 'duoc roi', "
+        "hoac khi da mo ta xong hinh anh.",
     ),
     ToolSpec(
         "set_medication_reminder",
-        "Dat nhac nho uong thuoc.",
+        "Dat nhac nho uong thuoc. Chi hoi them neu THIEU ten thuoc, lieu, hoac gio. "
+        "Neu user noi day du 'nhac uong Amlodipine 5mg luc 8h' → goi ngay.",
         {
             "medicine_name": ParameterSpec(STRING, "Ten thuoc."),
             "dosage": ParameterSpec(STRING, "Lieu dung."),
@@ -107,22 +112,27 @@ TOOL_SPECS = (
         },
         ["medicine_name", "dosage", "times"],
     ),
-    ToolSpec("list_medication_reminders", "Liet ke nhac nho thuoc va trang thai hom nay."),
+    ToolSpec(
+        "list_medication_reminders",
+        "Liet ke nhac nho thuoc va trang thai hom nay. Goi ngay khi user hoi 'hom nay uong thuoc gi', "
+        "'co nhac nho nao khong', 'thuoc hom nay'.",
+    ),
     ToolSpec(
         "mark_medication_taken",
-        "Danh dau da uong thuoc.",
+        "Danh dau da uong thuoc. Goi ngay khi user noi 'da uong', 'uong roi', 'danh dau da uong'.",
         {"medicine_name": ParameterSpec(STRING, "Ten thuoc.")},
         ["medicine_name"],
     ),
     ToolSpec(
         "mark_medication_skipped",
-        "Danh dau bo qua thuoc hom nay.",
+        "Danh dau bo qua thuoc hom nay. Goi ngay khi user noi 'bo qua', 'khong uong', 'skip'.",
         {"medicine_name": ParameterSpec(STRING, "Ten thuoc.")},
         ["medicine_name"],
     ),
     ToolSpec(
         "log_health_symptom",
-        "Ghi nhan trieu chung suc khoe.",
+        "Ghi nhan trieu chung suc khoe (dau dau, chong mat, met moi...). "
+        "Goi khi user mo ta trieu chung.",
         {
             "symptom": ParameterSpec(STRING, "Trieu chung."),
             "severity": ParameterSpec(STRING, "Muc do nghiem trong tuy chon."),
@@ -132,7 +142,8 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "log_health_metric",
-        "Ghi nhan chi so suc khoe.",
+        "Ghi nhan chi so suc khoe (huyet ap, nhiet do, nhip tim...). "
+        "Goi khi user noi chi so cu the.",
         {
             "metric_type": ParameterSpec(STRING, "Loai chi so."),
             "value": ParameterSpec(STRING, "Gia tri."),
@@ -142,7 +153,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "set_appointment_reminder",
-        "Dat nhac nho lich hen.",
+        "Dat nhac nho lich hen bac si. Chi hoi neu THIEU thoi gian hoac tieu de.",
         {
             "title": ParameterSpec(STRING, "Tieu de lich hen."),
             "datetime": ParameterSpec(STRING, "Thoi gian dang YYYY-MM-DD HH:MM."),
@@ -151,10 +162,17 @@ TOOL_SPECS = (
         },
         ["title", "datetime"],
     ),
-    ToolSpec("emergency_alert", "Gui canh bao SOS kem vi tri neu co."),
+    ToolSpec(
+        "emergency_alert",
+        "Gui canh bao SOS kem vi tri GPS den TAT CA nguoi than. "
+        "Chi goi khi co tinh huong nguy hiem thuc su (ngã, đau, cứu). "
+        "KHONG can xac nhan khi user ro rang nguy hiem.",
+    ),
     ToolSpec(
         "escalate_to_family",
-        "Goi nguoi than ho tro, co the bo qua nhung nguoi da thu.",
+        "Goi nguoi than ho tro khi AI khong giup duoc hoac can noi chuyen truc tiep. "
+        "Dung skip de bo qua nguoi da thu. "
+        "Dung khi: user hoang so, AI khong hieu sau 2 lan, hoac user yeu cau.",
         {
             "contact_name": ParameterSpec(STRING, "Lien he uu tien tuy chon."),
             "skip": ParameterSpec(ARRAY, "Danh sach lien he bo qua.", ParameterSpec(STRING, "Lien he")),
@@ -162,23 +180,24 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "navigate_to",
-        "Mo ban do va chi duong den dia diem.",
+        "Mo ban do va chi duong den dia diem. Goi khi user noi 'dan toi...', 'chi duong...', 'mo ban do'.",
         {"destination": ParameterSpec(STRING, "Diem den.")},
         ["destination"],
     ),
     ToolSpec(
         "web_search",
-        "Tim kiem web bang Exa khi can thong tin moi, tin tuc, thoi tiet, gia ca, su kien, hoac du lieu hien tai.",
+        "Tim kiem web khi can thong tin MOI: tin tuc, thoi tiet, gia ca, su kien, du lieu hien tai. "
+        "KHONG dung cho kien thuc co dinh, tro chuyen thuong, hoac yeu da du du lieu.",
         {
             "query": ParameterSpec(STRING, "Cau truy van can tim tren web."),
-            "max_results": ParameterSpec(INTEGER, "So ket qua toi da, mac dinh 3, toi da 5."),
+            "max_results": ParameterSpec(INTEGER, "So ket qua toi da, mac dinh 3."),
         },
         ["query"],
     ),
-    ToolSpec("escalate_to_volunteer", "Ket noi tinh nguyen vien khi gia dinh khong tra loi."),
     ToolSpec(
         "rate_volunteer",
-        "Danh gia tinh nguyen vien sau cuoc goi.",
+        "Danh gia tinh nguyen vien sau cuoc goi (1-5 sao). "
+        "Goi sau khi cuoc goi volunteer ket thuc va user da cho diem.",
         {
             "volunteer_id": ParameterSpec(STRING, "ID tinh nguyen vien."),
             "match_id": ParameterSpec(STRING, "ID phien ket noi."),
@@ -186,18 +205,25 @@ TOOL_SPECS = (
         },
         ["volunteer_id", "match_id", "score"],
     ),
-    ToolSpec("get_location", "Lay vi tri hien tai tu dien thoai."),
-    ToolSpec("get_current_location", "Lay vi tri hien tai tu dien thoai."),
-    ToolSpec("update_location", "Cap nhat vi tri hien tai len he thong."),
+    ToolSpec(
+        "get_location",
+        "Lay vi tri hien tai tu dien thoai nguoi dung. "
+        "Goi khi user hoi 'toi dang o dau', 'vi tri hien tai'.",
+    ),
+    ToolSpec(
+        "update_location",
+        "Cap nhat vi tri hien tai len he thong de nguoi than co the theo doi. "
+        "Goi khi user yeu cau cap nhat vi tri.",
+    ),
     ToolSpec(
         "answer_incoming_call",
-        "Bat may ho nguoi dung khi co cuoc goi den dang do chuong. "
-        "Chi goi khi nguoi dung dong y nghe may.",
+        "Bat may khi co cuoc goi den dang do chuong. "
+        "CHI GOI khi user dong y: 'nghe', 'bat may', 'ok'.",
     ),
     ToolSpec(
         "decline_incoming_call",
-        "Tu choi cuoc goi den dang do chuong. "
-        "Chi goi khi nguoi dung yeu cau khong nghe / tu choi.",
+        "Tu choi cuoc goi den. "
+        "CHI GOI khi user noi 'khong nghe', 'tu choi', 'tat'.",
     ),
 )
 

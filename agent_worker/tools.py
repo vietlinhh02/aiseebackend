@@ -41,22 +41,6 @@ class AiSeeAgent(Agent):
     # --- Phase 1: Communication + Camera ---
 
     @function_tool()
-    async def make_voice_call(self, contact_name: str) -> dict:
-        """Call a family member by name or relationship (voice only)."""
-        return await self._backend.tool_call(
-            "call_family_contact", self._uid(),
-            {"contact_name": contact_name, "call_type": "voice"},
-        )
-
-    @function_tool()
-    async def make_video_call(self, contact_name: str) -> dict:
-        """Video call a family member by name or relationship."""
-        return await self._backend.tool_call(
-            "call_family_contact", self._uid(),
-            {"contact_name": contact_name, "call_type": "video"},
-        )
-
-    @function_tool()
     async def send_chat_message(
         self, contact_name: str, message: str,
     ) -> dict:
@@ -97,7 +81,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def call_support_contact(
-        self, contact_name: str = "", call_type: str = "voice",
+        self, contact_name: str = "", call_type: str = "video",
     ) -> dict:
         """Call a support contact: named family first, otherwise volunteer support."""
         return await self._backend.tool_call_with_timeout(
@@ -129,28 +113,34 @@ class AiSeeAgent(Agent):
             }
         source_id = f"camera-{uuid.uuid4()}"
         try:
-            await self._backend.check_quota(
-                self._uid(), "camera_activations", 1,
-            )
+            try:
+                await self._backend.check_quota(
+                    self._uid(), "camera_activations", 1,
+                )
+            except Exception as exc:
+                logger.warning("camera quota check failed (proceeding anyway): %s", exc)
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
                 method='enable_camera',
                 payload='{}',
             )
             result = json.loads(response)
-            await self._backend.record_usage(
-                self._uid(),
-                "camera_activations",
-                1,
-                "activations",
-                "agent",
-                source_id,
-                {
-                    "reason": reason,
-                    "consent_source": consent_source,
-                    "consent_phrase": consent_phrase,
-                },
-            )
+            try:
+                await self._backend.record_usage(
+                    self._uid(),
+                    "camera_activations",
+                    1,
+                    "activations",
+                    "agent",
+                    source_id,
+                    {
+                        "reason": reason,
+                        "consent_source": consent_source,
+                        "consent_phrase": consent_phrase,
+                    },
+                )
+            except Exception as exc:
+                logger.warning("camera record_usage failed (camera still active): %s", exc)
             return result
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
@@ -384,13 +374,6 @@ class AiSeeAgent(Agent):
     # --- Phase 3: Volunteer + Location ---
 
     @function_tool()
-    async def escalate_to_volunteer(self) -> dict:
-        """Ket noi voi tinh nguyen vien khi gia dinh khong tra loi. Tra ve match_id de theo doi."""
-        return await self._backend.tool_call(
-            "escalate_to_volunteer", self._uid(), {},
-        )
-
-    @function_tool()
     async def rate_volunteer(
         self,
         volunteer_id: str,
@@ -405,7 +388,7 @@ class AiSeeAgent(Agent):
         )
 
     @function_tool()
-    async def get_current_location(self) -> dict:
+    async def get_location(self) -> dict:
         """Lay vi tri hien tai — tra ve dia chi doc duoc va toa do GPS."""
         try:
             response = await self._lp.perform_rpc(

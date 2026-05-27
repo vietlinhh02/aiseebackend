@@ -104,11 +104,8 @@ class ToolRouter:
         )
         handlers.update(
             {
-                "make_voice_call": self._family_call_alias("voice"),
-                "make_video_call": self._family_call_alias("video"),
                 "call_family_contact": self._call_family_contact,
                 "call_support_contact": self._call_support_contact,
-                "escalate_to_volunteer": self._call_support_contact_alias,
                 "activate_camera": self._activate_camera,
                 "deactivate_camera": self._deactivate_camera,
                 "set_medication_reminder": self._schedule_handler(
@@ -123,7 +120,6 @@ class ToolRouter:
                 "navigate_to": self._navigate_to,
                 "web_search": self._web_search,
                 "get_location": self._get_location,
-                "get_current_location": self._get_location,
                 "update_location": self._update_location,
                 "answer_incoming_call": self._answer_incoming_call,
                 "decline_incoming_call": self._decline_incoming_call,
@@ -144,14 +140,6 @@ class ToolRouter:
     def _schedule_handler(self, name: str) -> ToolHandler:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             return await self._backend_with_schedule_action(name, args)
-
-        return handler
-
-    def _family_call_alias(self, call_type: str) -> ToolHandler:
-        async def handler(args: dict[str, Any]) -> dict[str, Any]:
-            payload = dict(args)
-            payload["call_type"] = call_type
-            return await self._call_family_contact(payload)
 
         return handler
 
@@ -211,21 +199,27 @@ class ToolRouter:
                 ),
             }
         source_id = f"camera-{uuid.uuid4()}"
-        await self.backend.check_quota(self._uid(), "camera_activations", 1)
+        try:
+            await self.backend.check_quota(self._uid(), "camera_activations", 1)
+        except Exception as exc:
+            logger.warning("camera quota check failed (proceeding anyway): %s", exc)
         result = await self._device_request("enable_camera", {}, timeout=8.0)
-        await self.backend.record_usage(
-            self._uid(),
-            "camera_activations",
-            1,
-            "activations",
-            "agent",
-            source_id,
-            {
-                "reason": reason,
-                "consent_source": consent_source,
-                "consent_phrase": consent_phrase,
-            },
-        )
+        try:
+            await self.backend.record_usage(
+                self._uid(),
+                "camera_activations",
+                1,
+                "activations",
+                "agent",
+                source_id,
+                {
+                    "reason": reason,
+                    "consent_source": consent_source,
+                    "consent_phrase": consent_phrase,
+                },
+            )
+        except Exception as exc:
+            logger.warning("camera record_usage failed (camera still active): %s", exc)
         return result
 
     async def _deactivate_camera(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -247,33 +241,32 @@ class ToolRouter:
         return result
 
     async def _call_family_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        call_type = self._normalize_call_type(args.get("call_type"))
         result = await self.backend.tool_call(
             "call_family_contact",
             self._uid(),
             {
                 "contact_name": str(args.get("contact_name") or ""),
-                "call_type": self._normalize_call_type(args.get("call_type")),
+                "call_type": call_type,
             },
         )
+        result["call_type"] = call_type
         return await self._start_prepared_call(result)
 
     async def _call_support_contact(self, args: dict[str, Any]) -> dict[str, Any]:
+        call_type = self._normalize_call_type(args.get("call_type"))
         result = await self.backend.tool_call_with_timeout(
             "call_support_contact",
             self._uid(),
             {
                 "contact_name": str(args.get("contact_name") or ""),
-                "call_type": self._normalize_call_type(args.get("call_type")),
+                "call_type": call_type,
             },
             timeout=SUPPORT_CALL_BACKEND_TIMEOUT_SECONDS,
         )
+        # Force call_type from args — backend may not echo it back.
+        result["call_type"] = call_type
         return await self._start_prepared_call(result)
-
-    async def _call_support_contact_alias(self, args: dict[str, Any]) -> dict[str, Any]:
-        payload = dict(args)
-        payload.setdefault("contact_name", "")
-        payload.setdefault("call_type", "voice")
-        return await self._call_support_contact(payload)
 
     async def _start_prepared_call(self, result: dict[str, Any]) -> dict[str, Any]:
         status = str(result.get("status") or "")

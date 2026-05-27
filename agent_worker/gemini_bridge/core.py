@@ -32,29 +32,13 @@ PENDING_TASK_DRAIN_SECONDS = 0.25
 
 TOOL_ROUTING_INSTRUCTIONS = """
 
-=== TOOL ROUTING RULES ===
-- Camera chi duoc mo khi co dong y ro rang.
-- Neu user noi ro "bat camera", "mo camera", "cho toi xem", "cho con xem",
-  "xem giup", "nhin giup": goi activate_camera voi consent_source la
-  explicit_request va consent_phrase la cum tu user vua noi.
-- Neu user noi mo ho nhu "doc cai nay", "cai nay la gi", "phia truoc co gi":
-  KHONG goi activate_camera ngay. Hay hoi co muon mo camera de xem khong.
-- Chi sau khi user dong y ro rang nhu "co", "uh", "duoc", "mo di", "xem di"
-  moi goi activate_camera voi consent_source la explicit_confirmation va
-  consent_phrase la cau dong y do.
-- Khi người dùng yêu cầu tắt camera, dừng camera, thôi nhìn, dừng quay,
-  hoặc nói "tắt đi" ngay sau khi camera đang bật: gọi tool deactivate_camera
-  trước khi trả lời.
-- Không chỉ nói rằng bạn sẽ bật hoặc tắt camera. Phải gọi đúng tool trước,
-  rồi báo kết quả ngắn gọn.
-- For English camera commands, call activate_camera for turn on/open/see/look,
-  and deactivate_camera for turn off/stop/close camera.
-- Khi người dùng hỏi tin tức, thông tin hiện tại, thời tiết, giá cả, sự kiện,
-  hoặc yêu cầu tìm trên mạng: gọi tool web_search trước khi trả lời.
-- Không gọi web_search cho kiến thức ổn định, trò chuyện thường, điều khiển
-  thiết bị, camera, nhạc, tin nhắn, lịch, thuốc, hoặc yêu cầu đã đủ dữ liệu.
-- Khi gọi web_search, dùng truy vấn ngắn gọn và chỉ yêu cầu nhiều hơn 3 kết quả
-  nếu người dùng thật sự cần so sánh nhiều nguồn.
+=== TOOL CALL RULES ===
+- Goi tool ngay lap tuc, khong noi gi truoc khi goi tool.
+- KHONG bao gio noi "de toi cap nhat", "toi se kiem tra", "let me check" — goi tool im lang.
+- Camera: chi mo khi user noi ro "mo camera"/"bat camera"/"xem giup" HOAC da dong y ro rang.
+- Neu mo ho ("cai nay la gi", "doc cai nay"): hoi 1 cau "Ban muon mo camera de xem khong?"
+- Tat camera: goi deactivate_camera ngay khi user noi tat/dung/thoi.
+- web_search: chi khi can thong tin moi (tin tuc, thoi tiet, gia ca, su kien). Khong cho kien thuc co dinh.
 """
 
 logger = logging.getLogger("aisee-agent")
@@ -203,6 +187,11 @@ class GeminiEventHandler:
             *(self._function_response_for_call(function_call) for function_call in function_calls)
         )
         if responses:
+            for resp in responses:
+                try:
+                    resp.scheduling = "SILENT"
+                except Exception:
+                    pass
             await session.send_tool_response(function_responses=responses)
             logger.info("gemini tool_response sent count=%d", len(responses))
 
