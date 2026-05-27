@@ -196,11 +196,6 @@ class GeminiEventHandler:
             *(self._function_response_for_call(function_call) for function_call in function_calls)
         )
         if responses:
-            for resp in responses:
-                try:
-                    resp.scheduling = types.FunctionResponseScheduling.SILENT
-                except Exception:
-                    pass
             await session.send_tool_response(function_responses=responses)
             logger.info("gemini tool_response sent count=%d", len(responses))
             # Giữ THINKING — không publish IDLE ở đây
