@@ -96,5 +96,7 @@ def _matches_any_phrase(text: str, phrases: tuple[str, ...]) -> bool:
 def _normalize_text(value: str) -> str:
     lowered = unicodedata.normalize("NFD", str(value or "").strip().lower())
     without_marks = "".join(ch for ch in lowered if unicodedata.category(ch) != "Mn")
+    # đ (U+0111) không decompose trong NFD — map thủ công
+    without_marks = without_marks.replace("đ", "d").replace("Đ", "d")
     cleaned = "".join(ch if ch.isalnum() else " " for ch in without_marks)
     return " ".join(cleaned.split())
