@@ -290,6 +290,7 @@ class GeminiTransportSession:
     async def _handle_inbound_event(self, gemini_session, event, state_publisher) -> None:
         if isinstance(event, InboundAudioEvent):
             await state_publisher.publish(AgentState.LISTENING)
+            state_publisher.on_audio_input()
             if event.pcm:
                 await gemini_session.send_realtime_input(audio=self.settings.audio_blob(event.pcm))
             return
