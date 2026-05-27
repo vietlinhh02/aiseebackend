@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
     gemini_model: str = Field("gemini-3.1-flash-live-preview", alias="GEMINI_MODEL")
     gemini_voice: str = Field("Aoede", alias="GEMINI_VOICE")
-    gemini_thinking_level: str = Field("low", alias="GEMINI_THINKING_LEVEL")
+    gemini_thinking_level: str = Field("minimal", alias="GEMINI_THINKING_LEVEL")
     gemini_audio_sample_rate: int = Field(16000, alias="GEMINI_AUDIO_SAMPLE_RATE")
     gemini_response_audio_sample_rate: int = Field(
         24000,
