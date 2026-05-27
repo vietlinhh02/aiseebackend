@@ -67,7 +67,7 @@ services:
       - GO_BACKEND_URL=${GO_BACKEND_URL:-http://host.docker.internal:8080/api/internal}
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.1-flash-live-preview}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-live-2.5-flash-native-audio}
       - GEMINI_VOICE=${GEMINI_VOICE:-Aoede}
       - GEMINI_THINKING_LEVEL=${GEMINI_THINKING_LEVEL:-low}
       - GEMINI_AUDIO_SAMPLE_RATE=${GEMINI_AUDIO_SAMPLE_RATE:-16000}
