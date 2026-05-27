@@ -96,6 +96,7 @@ class GeminiLiveSettings:
                 thinking_level=self._thinking_level(),
             ),
             realtime_input_config=types.RealtimeInputConfig(
+                activity_handling=types.ActivityHandling.NO_INTERRUPTION,
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     disabled=False,
                     silence_duration_ms=200,
