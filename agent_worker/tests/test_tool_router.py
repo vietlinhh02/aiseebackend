@@ -83,11 +83,11 @@ async def test_router_dispatches_backend_only_tool():
         user_context={"user_id": "u1", "user_identity": "phone1"},
     )
 
-    result = await router.call("send_chat_message", {"contact_name": "Nam", "message": "Xin chao"})
+    result = await router.call("send_chat_message", {"contact_name": "Nam", "message": "Xin chào"})
 
     assert result == {"status": "ok", "tool": "send_chat_message"}
     assert backend.calls == [
-        ("tool_call", "send_chat_message", "u1", {"contact_name": "Nam", "message": "Xin chao"})
+        ("tool_call", "send_chat_message", "u1", {"contact_name": "Nam", "message": "Xin chào"})
     ]
     assert participant.rpc_calls == []
 
@@ -203,7 +203,7 @@ async def test_router_support_call_alias_uses_timeout_backend_call():
             "token": "caller-token",
             "call_type": "voice",
             "contact_id": "v1",
-            "contact_name": "Tinh nguyen vien",
+            "contact_name": "Tình nguyện viên",
             "contact_role": "volunteer",
             "answer_timeout_seconds": 12,
         }
@@ -250,7 +250,7 @@ async def test_router_blocks_camera_without_explicit_consent():
         user_context={"user_id": "u1", "user_identity": "phone1"},
     )
 
-    result = await router.call("activate_camera", {"reason": "Doc nhan thuoc"})
+    result = await router.call("activate_camera", {"reason": "Đọc nhãn thuốc"})
 
     assert result["status"] == "blocked"
     assert result["error"] == "camera_consent_required"
@@ -270,9 +270,9 @@ async def test_router_allows_camera_after_explicit_confirmation():
     result = await router.call(
         "activate_camera",
         {
-            "reason": "Doc nhan thuoc",
+            "reason": "Đọc nhãn thuốc",
             "consent_source": "explicit_confirmation",
-            "consent_phrase": "uh mo di",
+            "consent_phrase": "uh mở đi",
         },
     )
 
@@ -281,9 +281,9 @@ async def test_router_allows_camera_after_explicit_confirmation():
     assert backend.calls[0] == ("check_quota", "u1", "camera_activations", 1)
     assert backend.calls[1][0] == "record_usage"
     assert backend.calls[1][-1] == {
-        "reason": "Doc nhan thuoc",
+        "reason": "Đọc nhãn thuốc",
         "consent_source": "explicit_confirmation",
-        "consent_phrase": "uh mo di",
+        "consent_phrase": "uh mở đi",
     }
 
 @pytest.mark.anyio
@@ -325,7 +325,7 @@ async def test_router_dispatches_hybrid_tool_and_app_action():
 
     result = await router.call(
         "set_medication_reminder",
-        {"medicine_name": "A", "dosage": "1 vien", "times": ["07:00"], "frequency": "daily"},
+        {"medicine_name": "A", "dosage": "1 viên", "times": ["07:00"], "frequency": "daily"},
     )
 
     assert result == {"status": "ok"}

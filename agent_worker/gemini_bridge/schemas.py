@@ -29,201 +29,201 @@ ARRAY = types.Type.ARRAY
 TOOL_SPECS = (
     ToolSpec(
         "send_chat_message",
-        "Gui tin nhan van ban cho nguoi than. "
-        "Chi goi khi user cung cap CA TEN/VAI TRO va CA NOI DUNG tin nhan. "
-        "Neu thieu 1 trong 2: hoi them.",
+        "Gửi tin nhắn văn bản cho người thân. "
+        "Chỉ gọi khi user cung cấp CẢ TÊN/VAI TRÒ và CẢ NỘI DUNG tin nhắn. "
+        "Nếu thiếu 1 trong 2: hỏi thêm.",
         {
-            "contact_name": ParameterSpec(STRING, "Ten hoac quan he nguoi nhan."),
-            "message": ParameterSpec(STRING, "Noi dung tin nhan."),
+            "contact_name": ParameterSpec(STRING, "Tên hoặc quan hệ người nhận."),
+            "message": ParameterSpec(STRING, "Nội dung tin nhắn."),
         },
         ["contact_name", "message"],
     ),
     ToolSpec(
         "read_unread_messages",
-        "Doc tin nhan chua doc. Goi ngay khi user muon doc tin, khong can xac nhan. "
-        "Co the loc theo ten lien he neu user chi dinh.",
-        {"contact_name": ParameterSpec(STRING, "Ten lien he tuy chon.")},
+        "Đọc tin nhắn chưa đọc. Gọi ngay khi user muốn đọc tin, không cần xác nhận. "
+        "Có thể lọc theo tên liên hệ nếu user chỉ định.",
+        {"contact_name": ParameterSpec(STRING, "Tên liên hệ tùy chọn.")},
     ),
     ToolSpec(
         "call_family_contact",
-        "Goi dien/video cho nguoi nha theo ten hoac vai tro (me, anh, chi, con...). "
-        "Chi goi khi user noi R TEN hoac VAI TRO. "
-        "Neu user chi noi 'goi dien' ma khong noi ten: hoi 'Ban muon goi cho ai?'. "
-        "Mo cuoc goi tren may nguoi dung va cho ket qua bat may hoac het gio.",
+        "Gọi điện/video cho người nhà theo tên hoặc vai trò (mẹ, anh, chị, con...). "
+        "Chỉ gọi khi user nói RÕ TÊN hoặc VAI TRÒ. "
+        "Nếu user chỉ nói 'gọi điện' mà không nói tên: hỏi 'Bạn muốn gọi cho ai?'. "
+        "Mở cuộc gọi trên máy người dùng và cho kết quả bắt máy hoặc hết giờ.",
         {
-            "contact_name": ParameterSpec(STRING, "Ten hoac quan he cua nguoi nha can goi."),
-            "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
+            "contact_name": ParameterSpec(STRING, "Tên hoặc quan hệ của người nhà cần gọi."),
+            "call_type": ParameterSpec(STRING, "Loại cuộc gọi: voice hoặc video. Mặc định voice."),
         },
         ["contact_name"],
     ),
     ToolSpec(
         "call_support_contact",
-        "Goi nguoi ho tro/nguoi giup/tinh nguyen vien. "
-        "Neu user noi ten nguoi nha cu the → goi nguoi nha do. "
-        "Neu user noi chung chung 'nguoi ho tro', 'tinh nguyen vien', 'ai do giup' "
-        "→ tim volunteer tu backend. "
-        "Dung khi user noi 'goi nguoi giup', 'can ai do ho tro', 'goi tinh nguyen vien'.",
+        "Gọi người hỗ trợ/người giúp/tình nguyện viên. "
+        "Nếu user nói tên người nhà cụ thể → gọi người nhà đó. "
+        "Nếu user nói chung chung 'người hỗ trợ', 'tình nguyện viên', 'ai đó giúp' "
+        "→ tìm volunteer từ backend. "
+        "Dùng khi user nói 'gọi người giúp', 'cần ai đó hỗ trợ', 'gọi tình nguyện viên'.",
         {
-            "contact_name": ParameterSpec(STRING, "Ten nguoi nha tuy chon. Bo trong de tim volunteer."),
-            "call_type": ParameterSpec(STRING, "Loai cuoc goi: voice hoac video. Mac dinh voice."),
+            "contact_name": ParameterSpec(STRING, "Tên người nhà tùy chọn. Để trống để tìm volunteer."),
+            "call_type": ParameterSpec(STRING, "Loại cuộc gọi: voice hoặc video. Mặc định voice."),
         },
     ),
     ToolSpec(
         "list_family_contacts",
-        "Kiem tra realtime xem nguoi dung da lien ket gia dinh chua va liet ke cac lien he. "
-        "Goi khi user hoi 'co ai lien ket chua', 'co nhung ai', hoac truoc khi goi nguoi than "
-        "de biet danh sach hien co.",
+        "Kiểm tra realtime xem người dùng đã liên kết gia đình chưa và liệt kê các liên hệ hiện có. "
+        "Gọi khi user hỏi 'có ai liên kết chưa', 'có những ai', hoặc trước khi gọi người thân "
+        "để biết danh sách hiện có.",
     ),
     ToolSpec(
         "activate_camera",
-        "Bat camera de AI nhin qua may anh nguoi dung. "
-        "CHI GOI khi: (1) user noi ro 'mo camera', 'bat camera', 'xem giup', 'nhin giup' "
-        "→ consent_source=explicit_request; HOAC (2) user da dong y ro rang sau khi duoc hoi "
-        "→ consent_source=explicit_confirmation. "
-        "KHONG GOI khi user noi mo ho nhu 'cai nay la gi', 'doc cai nay'.",
+        "Bật camera để AI nhìn qua máy ảnh người dùng. "
+        "CHỈ GỌI khi: (1) user nói rõ 'mở camera', 'bật camera', 'xem giúp', 'nhìn giúp' "
+        "-> consent_source=explicit_request; HOẶC (2) user đã đồng ý rõ ràng sau khi được hỏi "
+        "-> consent_source=explicit_confirmation. "
+        "KHÔNG GỌI khi user nói mơ hồ như 'cái này là gì', 'đọc cái này'.",
         {
-            "reason": ParameterSpec(STRING, "Ly do can bat camera."),
+            "reason": ParameterSpec(STRING, "Lý do cần bật camera."),
             "consent_phrase": ParameterSpec(
                 STRING,
-                "Cum tu user vua noi de cho phep mo camera, giu gan nguyen van.",
+                "Cụm từ user vừa nói để cho phép mở camera, giữ gần nguyên văn.",
             ),
             "consent_source": ParameterSpec(
                 STRING,
-                "explicit_request neu user tu noi mo/xem; explicit_confirmation neu user dong y sau hoi.",
+                "explicit_request nếu user tự nói mở/xem; explicit_confirmation nếu user đồng ý sau hỏi.",
             ),
         },
         ["reason", "consent_phrase", "consent_source"],
     ),
     ToolSpec(
         "deactivate_camera",
-        "Tat camera, quay ve che do am thanh. "
-        "Goi ngay khi user noi 'tat camera', 'thoi', 'dung', 'duoc roi', "
-        "hoac khi da mo ta xong hinh anh.",
+        "Tắt camera, quay về chế độ âm thanh. "
+        "Gọi ngay khi user nói 'tắt camera', 'thôi', 'dừng', 'được rồi', "
+        "hoặc khi đã mô tả xong hình ảnh.",
     ),
     ToolSpec(
         "set_medication_reminder",
-        "Dat nhac nho uong thuoc. Chi hoi them neu THIEU ten thuoc, lieu, hoac gio. "
-        "Neu user noi day du 'nhac uong Amlodipine 5mg luc 8h' → goi ngay.",
+        "Đặt nhắc nhở uống thuốc. Chỉ hỏi thêm nếu THIẾU tên thuốc, liều, hoặc giờ. "
+        "Nếu user nói đầy đủ 'nhắc uống Amlodipine 5mg lúc 8h' -> gọi ngay.",
         {
-            "medicine_name": ParameterSpec(STRING, "Ten thuoc."),
-            "dosage": ParameterSpec(STRING, "Lieu dung."),
-            "times": ParameterSpec(ARRAY, "Danh sach gio dang HH:MM.", ParameterSpec(STRING, "Gio")),
-            "frequency": ParameterSpec(STRING, "Tan suat, mac dinh daily."),
+            "medicine_name": ParameterSpec(STRING, "Tên thuốc."),
+            "dosage": ParameterSpec(STRING, "Liều dùng."),
+            "times": ParameterSpec(ARRAY, "Danh sách giờ dạng HH:MM.", ParameterSpec(STRING, "Giờ")),
+            "frequency": ParameterSpec(STRING, "Tần suất, mặc định daily."),
         },
         ["medicine_name", "dosage", "times"],
     ),
     ToolSpec(
         "list_medication_reminders",
-        "Liet ke nhac nho thuoc va trang thai hom nay. Goi ngay khi user hoi 'hom nay uong thuoc gi', "
-        "'co nhac nho nao khong', 'thuoc hom nay'.",
+        "Liệt kê nhắc nhở thuốc và trạng thái hôm nay. Gọi ngay khi user hỏi 'hôm nay uống thuốc gì', "
+        "'có nhắc nhở nào không', 'thuốc hôm nay'.",
     ),
     ToolSpec(
         "mark_medication_taken",
-        "Danh dau da uong thuoc. Goi ngay khi user noi 'da uong', 'uong roi', 'danh dau da uong'.",
-        {"medicine_name": ParameterSpec(STRING, "Ten thuoc.")},
+        "Đánh dấu đã uống thuốc. Gọi ngay khi user nói 'đã uống', 'uống rồi', 'đánh dấu đã uống'.",
+        {"medicine_name": ParameterSpec(STRING, "Tên thuốc.")},
         ["medicine_name"],
     ),
     ToolSpec(
         "mark_medication_skipped",
-        "Danh dau bo qua thuoc hom nay. Goi ngay khi user noi 'bo qua', 'khong uong', 'skip'.",
-        {"medicine_name": ParameterSpec(STRING, "Ten thuoc.")},
+        "Đánh dấu bỏ qua thuốc hôm nay. Gọi ngay khi user nói 'bỏ qua', 'không uống', 'skip'.",
+        {"medicine_name": ParameterSpec(STRING, "Tên thuốc.")},
         ["medicine_name"],
     ),
     ToolSpec(
         "log_health_symptom",
-        "Ghi nhan trieu chung suc khoe (dau dau, chong mat, met moi...). "
-        "Goi khi user mo ta trieu chung.",
+        "Ghi nhận triệu chứng sức khỏe (đau đầu, chóng mặt, mệt mỏi...). "
+        "Gọi khi user mô tả triệu chứng.",
         {
-            "symptom": ParameterSpec(STRING, "Trieu chung."),
-            "severity": ParameterSpec(STRING, "Muc do nghiem trong tuy chon."),
-            "notes": ParameterSpec(STRING, "Ghi chu bo sung."),
+            "symptom": ParameterSpec(STRING, "Triệu chứng."),
+            "severity": ParameterSpec(STRING, "Mức độ nghiêm trọng tùy chọn."),
+            "notes": ParameterSpec(STRING, "Ghi chú bổ sung."),
         },
         ["symptom"],
     ),
     ToolSpec(
         "log_health_metric",
-        "Ghi nhan chi so suc khoe (huyet ap, nhiet do, nhip tim...). "
-        "Goi khi user noi chi so cu the.",
+        "Ghi nhận chỉ số sức khỏe (huyết áp, nhiệt độ, nhịp tim...). "
+        "Gọi khi user nói chỉ số cụ thể.",
         {
-            "metric_type": ParameterSpec(STRING, "Loai chi so."),
-            "value": ParameterSpec(STRING, "Gia tri."),
-            "unit": ParameterSpec(STRING, "Don vi tuy chon."),
+            "metric_type": ParameterSpec(STRING, "Loại chỉ số."),
+            "value": ParameterSpec(STRING, "Giá trị."),
+            "unit": ParameterSpec(STRING, "Đơn vị tùy chọn."),
         },
         ["metric_type", "value"],
     ),
     ToolSpec(
         "set_appointment_reminder",
-        "Dat nhac nho lich hen bac si. Chi hoi neu THIEU thoi gian hoac tieu de.",
+        "Đặt nhắc nhở lịch hẹn bác sĩ. Chỉ hỏi nếu THIẾU thời gian hoặc tiêu đề.",
         {
-            "title": ParameterSpec(STRING, "Tieu de lich hen."),
-            "datetime": ParameterSpec(STRING, "Thoi gian dang YYYY-MM-DD HH:MM."),
-            "location": ParameterSpec(STRING, "Dia diem tuy chon."),
-            "notes": ParameterSpec(STRING, "Ghi chu tuy chon."),
+            "title": ParameterSpec(STRING, "Tiêu đề lịch hẹn."),
+            "datetime": ParameterSpec(STRING, "Thời gian dạng YYYY-MM-DD HH:MM."),
+            "location": ParameterSpec(STRING, "Địa điểm tùy chọn."),
+            "notes": ParameterSpec(STRING, "Ghi chú tùy chọn."),
         },
         ["title", "datetime"],
     ),
     ToolSpec(
         "emergency_alert",
-        "Gui canh bao SOS kem vi tri GPS den TAT CA nguoi than. "
-        "Chi goi khi co tinh huong nguy hiem thuc su (ngã, đau, cứu). "
-        "KHONG can xac nhan khi user ro rang nguy hiem.",
+        "Gửi cảnh báo SOS kèm vị trí GPS đến TẤT CẢ người thân. "
+        "Chỉ gọi khi có tình huống nguy hiểm thực sự (ngã, đau, cứu). "
+        "KHÔNG cần xác nhận khi user rõ ràng nguy hiểm.",
     ),
     ToolSpec(
         "escalate_to_family",
-        "Goi nguoi than ho tro khi AI khong giup duoc hoac can noi chuyen truc tiep. "
-        "Dung skip de bo qua nguoi da thu. "
-        "Dung khi: user hoang so, AI khong hieu sau 2 lan, hoac user yeu cau.",
+        "Gọi người thân hỗ trợ khi AI không giúp được hoặc cần nói chuyện trực tiếp. "
+        "Dùng skip để bỏ qua người đã thử. "
+        "Dùng khi: user hoảng sợ, AI không hiểu sau 2 lần, hoặc user yêu cầu.",
         {
-            "contact_name": ParameterSpec(STRING, "Lien he uu tien tuy chon."),
-            "skip": ParameterSpec(ARRAY, "Danh sach lien he bo qua.", ParameterSpec(STRING, "Lien he")),
+            "contact_name": ParameterSpec(STRING, "Liên hệ ưu tiên tùy chọn."),
+            "skip": ParameterSpec(ARRAY, "Danh sách liên hệ bỏ qua.", ParameterSpec(STRING, "Liên hệ")),
         },
     ),
     ToolSpec(
         "navigate_to",
-        "Mo ban do va chi duong den dia diem. Goi khi user noi 'dan toi...', 'chi duong...', 'mo ban do'.",
-        {"destination": ParameterSpec(STRING, "Diem den.")},
+        "Mở bản đồ và chỉ đường đến địa điểm. Gọi khi user nói 'dẫn tới...', 'chỉ đường...', 'mở bản đồ'.",
+        {"destination": ParameterSpec(STRING, "Điểm đến.")},
         ["destination"],
     ),
     ToolSpec(
         "web_search",
-        "Tim kiem web khi can thong tin MOI: tin tuc, thoi tiet, gia ca, su kien, du lieu hien tai. "
-        "KHONG dung cho kien thuc co dinh, tro chuyen thuong, hoac yeu da du du lieu.",
+        "Tìm kiếm web khi cần thông tin MỚI: tin tức, thời tiết, giá cả, sự kiện, dữ liệu hiện tại. "
+        "KHÔNG dùng cho kiến thức cố định, trò chuyện thường, hoặc yêu cầu đã đủ dữ liệu.",
         {
-            "query": ParameterSpec(STRING, "Cau truy van can tim tren web."),
-            "max_results": ParameterSpec(INTEGER, "So ket qua toi da, mac dinh 3."),
+            "query": ParameterSpec(STRING, "Câu truy vấn cần tìm trên web."),
+            "max_results": ParameterSpec(INTEGER, "Số kết quả tối đa, mặc định 3."),
         },
         ["query"],
     ),
     ToolSpec(
         "rate_volunteer",
-        "Danh gia tinh nguyen vien sau cuoc goi (1-5 sao). "
-        "Goi sau khi cuoc goi volunteer ket thuc va user da cho diem.",
+        "Đánh giá tình nguyện viên sau cuộc gọi (1-5 sao). "
+        "Gọi sau khi cuộc gọi volunteer kết thúc và user đã cho điểm.",
         {
-            "volunteer_id": ParameterSpec(STRING, "ID tinh nguyen vien."),
-            "match_id": ParameterSpec(STRING, "ID phien ket noi."),
-            "score": ParameterSpec(INTEGER, "Diem 1 den 5."),
+            "volunteer_id": ParameterSpec(STRING, "ID tình nguyện viên."),
+            "match_id": ParameterSpec(STRING, "ID phiên kết nối."),
+            "score": ParameterSpec(INTEGER, "Điểm 1 đến 5."),
         },
         ["volunteer_id", "match_id", "score"],
     ),
     ToolSpec(
         "get_location",
-        "Lay vi tri hien tai tu dien thoai nguoi dung. "
-        "Goi khi user hoi 'toi dang o dau', 'vi tri hien tai'.",
+        "Lấy vị trí hiện tại từ điện thoại người dùng. "
+        "Gọi khi user hỏi 'tôi đang ở đâu', 'vị trí hiện tại'.",
     ),
     ToolSpec(
         "update_location",
-        "Cap nhat vi tri hien tai len he thong de nguoi than co the theo doi. "
-        "Goi khi user yeu cau cap nhat vi tri.",
+        "Cập nhật vị trí hiện tại lên hệ thống để người thân có thể theo dõi. "
+        "Gọi khi user yêu cầu cập nhật vị trí.",
     ),
     ToolSpec(
         "answer_incoming_call",
-        "Bat may khi co cuoc goi den dang do chuong. "
-        "CHI GOI khi user dong y: 'nghe', 'bat may', 'ok'.",
+        "Bắt máy khi có cuộc gọi đến đang đổ chuông. "
+        "CHỈ GỌI khi user đồng ý: 'nghe', 'bắt máy', 'ok'.",
     ),
     ToolSpec(
         "decline_incoming_call",
-        "Tu choi cuoc goi den. "
-        "CHI GOI khi user noi 'khong nghe', 'tu choi', 'tat'.",
+        "Từ chối cuộc gọi đến. "
+        "CHỈ GỌI khi user nói 'không nghe', 'từ chối', 'tắt'.",
     ),
 )
 

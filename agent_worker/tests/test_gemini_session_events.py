@@ -228,7 +228,7 @@ async def test_announce_incoming_call_uses_default_caller():
 
     await announce_incoming_call(session, {})
 
-    assert "ai do" in session.realtime_text[0]
+    assert "ai đó" in session.realtime_text[0]
 
 
 @pytest.mark.anyio
@@ -280,5 +280,5 @@ def test_live_config_prompt_includes_exact_camera_tool_rules():
 
     assert "activate_camera" in config.system_instruction
     assert "deactivate_camera" in config.system_instruction
-    assert "dong y ro rang" in config.system_instruction
+    assert "đồng ý rõ ràng" in config.system_instruction
     assert "tắt đi" in config.system_instruction

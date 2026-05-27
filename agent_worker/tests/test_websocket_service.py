@@ -215,7 +215,7 @@ async def test_websocket_service_routes_text_media_and_tool_results():
             "payload": {"session_id": "ai-1", "user_id": "user-1", "media_mode": "audio_pcm"},
         }
     )
-    await websocket.push_json({"type": "text", "text": "xin chao"})
+    await websocket.push_json({"type": "text", "text": "xin chào"})
     await websocket.push_json({"type": "audio_start"})
     await websocket.push_json({"type": "media_mode", "mode": "camera"})
     await websocket.push_binary(b"\xff\xd8\xff")
@@ -238,7 +238,7 @@ async def test_websocket_service_routes_text_media_and_tool_results():
     await websocket.finish()
     await task
 
-    assert gemini_session.realtime_inputs[0]["text"] == "xin chao"
+    assert gemini_session.realtime_inputs[0]["text"] == "xin chào"
     assert gemini_session.realtime_inputs[1]["video"].data == b"\xff\xd8\xff"
     assert gemini_session.realtime_inputs[1]["video"].mime_type == "image/jpeg"
     assert gemini_session.realtime_inputs[2]["audio"].data == b"\x01\x02"

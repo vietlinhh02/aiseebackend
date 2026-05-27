@@ -33,12 +33,12 @@ PENDING_TASK_DRAIN_SECONDS = 0.25
 TOOL_ROUTING_INSTRUCTIONS = """
 
 === TOOL CALL RULES ===
-- Goi tool ngay lap tuc, khong noi gi truoc khi goi tool.
-- KHONG bao gio noi "de toi cap nhat", "toi se kiem tra", "let me check" — goi tool im lang.
-- Camera: chi mo khi user noi ro "mo camera"/"bat camera"/"xem giup" HOAC da dong y ro rang.
-- Neu mo ho ("cai nay la gi", "doc cai nay"): hoi 1 cau "Ban muon mo camera de xem khong?"
-- Tat camera: goi deactivate_camera ngay khi user noi tat/dung/thoi.
-- web_search: chi khi can thong tin moi (tin tuc, thoi tiet, gia ca, su kien). Khong cho kien thuc co dinh.
+- Gọi tool ngay lập tức, không nói gì trước khi gọi tool.
+- KHÔNG bao giờ nói "để tôi cập nhật", "tôi sẽ kiểm tra", "let me check" — gọi tool im lặng.
+- Camera: chỉ mở khi user nói rõ "mở camera"/"bật camera"/"xem giúp" HOẶC đã đồng ý rõ ràng.
+- Nếu mơ hồ ("cái này là gì", "đọc cái này"): hỏi 1 câu "Bạn muốn mở camera để xem không?"
+- Tắt camera: gọi deactivate_camera ngay khi user nói tắt/dừng/thôi.
+- web_search: chỉ khi cần thông tin mới (tin tức, thời tiết, giá cả, sự kiện). Không cho kiến thức cố định.
 """
 
 logger = logging.getLogger("aisee-agent")
@@ -363,9 +363,9 @@ class GeminiTransportSession:
 
 
 NSFW_WARNING_TEXT = (
-    "Camera da tam tat vi phat hien noi dung khong phu hop. "
-    "Hay thong bao ngan gon cho nguoi dung biet camera da tam dung "
-    "va de nghi huong camera vao noi dung phu hop hon."
+    "Camera đã tạm tắt vì phát hiện nội dung không phù hợp. "
+    "Hãy thông báo ngắn gọn cho người dùng biết camera đã tạm dừng "
+    "và đề nghị hướng camera vào nội dung phù hợp hơn."
 )
 
 
@@ -378,15 +378,15 @@ async def send_nsfw_warning(session) -> None:
 
 
 async def announce_incoming_call(session, payload: dict) -> None:
-    caller = str(payload.get("caller_name") or "").strip() or "ai do"
+    caller = str(payload.get("caller_name") or "").strip() or "ai đó"
     call_type = str(payload.get("call_type") or "voice").strip().lower()
-    call_label = "video" if call_type == "video" else "thoai"
+    call_label = "video" if call_type == "video" else "thoại"
     text = (
-        f"Co cuoc goi {call_label} den tu {caller}. "
-        "Hay thong bao cho nguoi dung va hoi xem ho co muon nghe khong. "
-        "Neu nguoi dung dong y nghe, hay goi tool answer_incoming_call. "
-        "Neu nguoi dung tu choi, hay goi tool decline_incoming_call. "
-        "Khong duoc tu y bat may neu nguoi dung chua tra loi."
+        f"Có cuộc gọi {call_label} đến từ {caller}. "
+        "Hãy thông báo cho người dùng và hỏi xem họ có muốn nghe không. "
+        "Nếu người dùng đồng ý nghe, hãy gọi tool answer_incoming_call. "
+        "Nếu người dùng từ chối, hãy gọi tool decline_incoming_call. "
+        "Không được tự ý bật máy nếu người dùng chưa trả lời."
     )
     await session.send_realtime_input(text=text)
 

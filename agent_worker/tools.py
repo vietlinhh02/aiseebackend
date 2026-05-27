@@ -168,7 +168,7 @@ class AiSeeAgent(Agent):
         times: list[str],
         frequency: str = "daily",
     ) -> dict:
-        """Dat nhac nho uong thuoc. times la danh sach gio (VD: ["07:00", "21:00"])."""
+        """Đặt nhắc nhở uống thuốc. times là danh sách giờ (VD: ["07:00", "21:00"])."""
         result = await self._backend.tool_call(
             "set_medication_reminder", self._uid(),
             {"medicine_name": medicine_name, "dosage": dosage,
@@ -192,7 +192,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def list_medication_reminders(self) -> dict:
-        """Liet ke thuoc hom nay va trang thai da uong chua."""
+        """Liệt kê thuốc hôm nay và trạng thái đã uống chưa."""
         return await self._backend.tool_call(
             "list_medication_reminders", self._uid(), {},
         )
@@ -201,7 +201,7 @@ class AiSeeAgent(Agent):
     async def mark_medication_taken(
         self, medicine_name: str,
     ) -> dict:
-        """Xac nhan da uong thuoc."""
+        """Xác nhận đã uống thuốc."""
         return await self._backend.tool_call(
             "mark_medication_taken", self._uid(),
             {"medicine_name": medicine_name},
@@ -211,7 +211,7 @@ class AiSeeAgent(Agent):
     async def mark_medication_skipped(
         self, medicine_name: str,
     ) -> dict:
-        """Xac nhan bo qua khong uong thuoc hom nay."""
+        """Xác nhận bỏ qua không uống thuốc hôm nay."""
         return await self._backend.tool_call(
             "mark_medication_skipped", self._uid(),
             {"medicine_name": medicine_name},
@@ -224,7 +224,7 @@ class AiSeeAgent(Agent):
         severity: str = "",
         notes: str = "",
     ) -> dict:
-        """Ghi nhan trieu chung suc khoe (VD: dau dau, chong mat, met moi)."""
+        """Ghi nhận triệu chứng sức khỏe (VD: đau đầu, chóng mặt, mệt mỏi)."""
         params = {"symptom": symptom}
         if severity:
             params["severity"] = severity
@@ -241,7 +241,7 @@ class AiSeeAgent(Agent):
         value: str,
         unit: str = "",
     ) -> dict:
-        """Ghi nhan chi so suc khoe (VD: huyet ap 140/90, nhiet do 37.5)."""
+        """Ghi nhận chỉ số sức khỏe (VD: huyết áp 140/90, nhiệt độ 37.5)."""
         params = {"metric_type": metric_type, "value": value}
         if unit:
             params["unit"] = unit
@@ -257,7 +257,7 @@ class AiSeeAgent(Agent):
         location: str = "",
         notes: str = "",
     ) -> dict:
-        """Dat nhac nho lich hen bac si. datetime dang YYYY-MM-DD HH:MM."""
+        """Đặt nhắc nhở lịch hẹn bác sĩ. datetime dạng YYYY-MM-DD HH:MM."""
         result = await self._backend.tool_call(
             "set_appointment_reminder", self._uid(),
             {"title": title, "datetime": datetime,
@@ -283,7 +283,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def emergency_alert(self) -> dict:
-        """SOS khan cap — gui thong bao den tat ca nguoi than kem vi tri GPS."""
+        """SOS khẩn cấp — gửi thông báo đến tất cả người thân kèm vị trí GPS."""
         try:
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
@@ -311,7 +311,7 @@ class AiSeeAgent(Agent):
         contact_name: str = "",
         skip: list[str] | None = None,
     ) -> dict:
-        """Goi nguoi than ho tro khi AI khong giup duoc. Neu khong ai tra loi, goi lai voi skip de thu nguoi khac."""
+        """Gọi người thân hỗ trợ khi AI không giúp được. Nếu không ai trả lời, gọi lại với skip để thử người khác."""
         params: dict = {}
         if contact_name:
             params["contact_name"] = contact_name
@@ -326,7 +326,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def play_music(self, query: str) -> dict:
-        """Tim va phat nhac theo yeu cau."""
+        """Tìm và phát nhạc theo yêu cầu."""
         return await self._backend.tool_call(
             "play_music", self._uid(),
             {"query": query},
@@ -334,7 +334,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def control_music(self, action: str) -> dict:
-        """Dieu khien nhac dang phat: pause, resume, stop, next, previous, volume_up, volume_down."""
+        """Điều khiển nhạc đang phát: pause, resume, stop, next, previous, volume_up, volume_down."""
         return {
             "status": "disabled",
             "message": "music playback control is temporarily disabled",
@@ -344,7 +344,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def navigate_to(self, destination: str) -> dict:
-        """Mo ban do va chi duong den dia diem."""
+        """Mở bản đồ và chỉ đường đến địa điểm."""
         source_id = f"navigation-{uuid.uuid4()}"
         try:
             await self._backend.check_quota(
@@ -380,7 +380,7 @@ class AiSeeAgent(Agent):
         match_id: str,
         score: int,
     ) -> dict:
-        """Danh gia tinh nguyen vien sau cuoc goi (1-5 sao)."""
+        """Đánh giá tình nguyện viên sau cuộc gọi (1-5 sao)."""
         return await self._backend.tool_call(
             "rate_volunteer", self._uid(),
             {"volunteer_id": volunteer_id,
@@ -389,7 +389,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def get_location(self) -> dict:
-        """Lay vi tri hien tai — tra ve dia chi doc duoc va toa do GPS."""
+        """Lấy vị trí hiện tại — trả về địa chỉ đọc được và tọa độ GPS."""
         try:
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
@@ -403,7 +403,7 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def update_location(self) -> dict:
-        """Cap nhat vi tri hien tai cua nguoi dung len he thong."""
+        """Cập nhật vị trí hiện tại của người dùng lên hệ thống."""
         try:
             response = await self._lp.perform_rpc(
                 destination_identity=self._user_identity(),
