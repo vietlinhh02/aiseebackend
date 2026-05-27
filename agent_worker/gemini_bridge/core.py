@@ -189,7 +189,7 @@ class GeminiEventHandler:
         if responses:
             for resp in responses:
                 try:
-                    resp.scheduling = "SILENT"
+                    resp.scheduling = types.FunctionResponseScheduling.SILENT
                 except Exception:
                     pass
             await session.send_tool_response(function_responses=responses)

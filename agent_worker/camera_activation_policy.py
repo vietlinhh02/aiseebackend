@@ -90,7 +90,7 @@ def validate_camera_activation_consent(
 
 def _matches_any_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     padded = f" {text} "
-    return any(f" {phrase} " in padded for phrase in phrases)
+    return any(f" {_normalize_text(phrase)} " in padded for phrase in phrases)
 
 
 def _normalize_text(value: str) -> str:
