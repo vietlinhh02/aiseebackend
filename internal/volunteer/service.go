@@ -91,6 +91,7 @@ type Service struct {
 
 	answerTimeout      time.Duration
 	answerPollInterval time.Duration
+	answerJoinGrace    time.Duration
 }
 
 type RealtimeHub interface {
@@ -138,6 +139,7 @@ func NewService(
 
 		answerTimeout:      30 * time.Second,
 		answerPollInterval: 5 * time.Second,
+		answerJoinGrace:    time.Second,
 	}
 }
 
@@ -370,11 +372,43 @@ func (s *Service) waitForJoin(
 			for _, p := range participants {
 				if p.Identity == expectedParticipantID &&
 					p.Identity != callerID {
-					return true
+					return s.confirmParticipantStillJoined(
+						ctx, roomName, expectedParticipantID,
+					)
 				}
 			}
 		}
 	}
+}
+
+func (s *Service) confirmParticipantStillJoined(
+	ctx context.Context,
+	roomName string,
+	expectedParticipantID string,
+) bool {
+	if s.answerJoinGrace <= 0 {
+		return true
+	}
+	timer := time.NewTimer(s.answerJoinGrace)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+	}
+	participants, err := s.lk.ListParticipants(ctx, roomName)
+	if err != nil {
+		slog.Warn("confirmParticipantStillJoined: list participants",
+			"room", roomName, "error", err,
+		)
+		return false
+	}
+	for _, p := range participants {
+		if p.Identity == expectedParticipantID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetMatchStatus retrieves the current match status from

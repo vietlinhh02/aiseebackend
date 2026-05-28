@@ -66,18 +66,14 @@ type CommunityStats struct {
 }
 
 type CommunitySupporter struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	AvatarURL   string `json:"avatar_url,omitempty"`
+	AnonSeed string `json:"anon_seed"`
 }
 
 type CommunityActivity struct {
-	ActorID          string `json:"actor_id"`
-	ActorDisplayName string `json:"actor_display_name"`
-	ActorAvatarURL   string `json:"actor_avatar_url,omitempty"`
-	Type             string `json:"type"`
-	Amount           int32  `json:"amount"`
-	OccurredAt       string `json:"occurred_at"`
+	AnonSeed   string `json:"anon_seed"`
+	Type       string `json:"type"`
+	Amount     int32  `json:"amount"`
+	OccurredAt string `json:"occurred_at"`
 }
 
 type OverviewResponse struct {
@@ -129,14 +125,9 @@ func (s *Service) GetOverview(ctx context.Context, userID pgtype.UUID) (*Overvie
 	}
 	supporters := make([]CommunitySupporter, 0, len(recentSupporters))
 	for _, row := range recentSupporters {
-		supporter := CommunitySupporter{
-			ID:          row.ID.String(),
-			DisplayName: row.DisplayName,
-		}
-		if row.AvatarUrl.Valid {
-			supporter.AvatarURL = row.AvatarUrl.String
-		}
-		supporters = append(supporters, supporter)
+		supporters = append(supporters, CommunitySupporter{
+			AnonSeed: row.AnonSeed,
+		})
 	}
 
 	recentActivities, err := s.queries.ListRecentCommunityActivities(ctx, 10)
@@ -146,13 +137,9 @@ func (s *Service) GetOverview(ctx context.Context, userID pgtype.UUID) (*Overvie
 	activities := make([]CommunityActivity, 0, len(recentActivities))
 	for _, row := range recentActivities {
 		activity := CommunityActivity{
-			ActorID:          row.ActorID.String(),
-			ActorDisplayName: row.ActorDisplayName,
-			Type:             row.Type,
-			Amount:           row.Amount,
-		}
-		if row.ActorAvatarUrl.Valid {
-			activity.ActorAvatarURL = row.ActorAvatarUrl.String
+			AnonSeed: row.AnonSeed,
+			Type:     row.Type,
+			Amount:   row.Amount,
 		}
 		if row.OccurredAt.Valid {
 			activity.OccurredAt = row.OccurredAt.Time.UTC().Format(time.RFC3339)

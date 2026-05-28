@@ -169,26 +169,21 @@ func (q *Queries) InsertSupporterTransaction(ctx context.Context, arg InsertSupp
 
 const listRecentCommunityActivities = `-- name: ListRecentCommunityActivities :many
 SELECT
-    u.id AS actor_id,
-    COALESCE(NULLIF(u.display_name, ''), u.email) AS actor_display_name,
-    u.avatar_url AS actor_avatar_url,
+    MD5(st.user_id::TEXT) AS anon_seed,
     st.type,
     st.amount,
     st.created_at AS occurred_at
 FROM supporter_transactions st
-JOIN users u ON u.id = st.user_id
 WHERE st.type IN ('watch_ad', 'redeem')
 ORDER BY st.created_at DESC
 LIMIT $1
 `
 
 type ListRecentCommunityActivitiesRow struct {
-	ActorID          pgtype.UUID        `json:"actor_id"`
-	ActorDisplayName string             `json:"actor_display_name"`
-	ActorAvatarUrl   pgtype.Text        `json:"actor_avatar_url"`
-	Type             string             `json:"type"`
-	Amount           int32              `json:"amount"`
-	OccurredAt       pgtype.Timestamptz `json:"occurred_at"`
+	AnonSeed   string             `json:"anon_seed"`
+	Type       string             `json:"type"`
+	Amount     int32              `json:"amount"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
 }
 
 func (q *Queries) ListRecentCommunityActivities(ctx context.Context, limit int32) ([]ListRecentCommunityActivitiesRow, error) {
@@ -201,9 +196,7 @@ func (q *Queries) ListRecentCommunityActivities(ctx context.Context, limit int32
 	for rows.Next() {
 		var i ListRecentCommunityActivitiesRow
 		if err := rows.Scan(
-			&i.ActorID,
-			&i.ActorDisplayName,
-			&i.ActorAvatarUrl,
+			&i.AnonSeed,
 			&i.Type,
 			&i.Amount,
 			&i.OccurredAt,
@@ -220,21 +213,18 @@ func (q *Queries) ListRecentCommunityActivities(ctx context.Context, limit int32
 
 const listRecentCommunitySupporters = `-- name: ListRecentCommunitySupporters :many
 SELECT
-    u.id,
-    COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
-    u.avatar_url
+    MD5(adw.user_id::TEXT) AS anon_seed,
+    ROW_NUMBER() OVER (ORDER BY MAX(adw.watch_date) DESC) AS idx
 FROM supporter_daily_ad_watches adw
-JOIN users u ON u.id = adw.user_id
 WHERE adw.watch_date > CURRENT_DATE - INTERVAL '30 days'
-GROUP BY u.id, u.display_name, u.email, u.avatar_url
-ORDER BY MAX(adw.watch_date) DESC, COALESCE(NULLIF(u.display_name, ''), u.email)
+GROUP BY adw.user_id
+ORDER BY MAX(adw.watch_date) DESC
 LIMIT $1
 `
 
 type ListRecentCommunitySupportersRow struct {
-	ID          pgtype.UUID `json:"id"`
-	DisplayName string      `json:"display_name"`
-	AvatarUrl   pgtype.Text `json:"avatar_url"`
+	AnonSeed string `json:"anon_seed"`
+	Idx      int64  `json:"idx"`
 }
 
 func (q *Queries) ListRecentCommunitySupporters(ctx context.Context, limit int32) ([]ListRecentCommunitySupportersRow, error) {
@@ -246,7 +236,7 @@ func (q *Queries) ListRecentCommunitySupporters(ctx context.Context, limit int32
 	items := []ListRecentCommunitySupportersRow{}
 	for rows.Next() {
 		var i ListRecentCommunitySupportersRow
-		if err := rows.Scan(&i.ID, &i.DisplayName, &i.AvatarUrl); err != nil {
+		if err := rows.Scan(&i.AnonSeed, &i.Idx); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -270,11 +270,6 @@ func (h *Handler) handleCallFamilyContact(
 func (h *Handler) handleCallSupportContact(
 	ctx context.Context, req ToolCallRequest,
 ) (any, error) {
-	contactName := strings.TrimSpace(stringParam(req.Params, "contact_name"))
-	if contactName != "" && !isGenericSupportRequest(contactName) {
-		return h.handleCallFamilyContact(ctx, req)
-	}
-
 	callType := normalizeAssistantCallType(stringParam(req.Params, "call_type"))
 	result, err := h.volunteer.StartAssistantMatch(ctx, req.UserID, callType)
 	if err != nil {

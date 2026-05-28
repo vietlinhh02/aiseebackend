@@ -52,26 +52,21 @@ SELECT
 
 -- name: ListRecentCommunitySupporters :many
 SELECT
-    u.id,
-    COALESCE(NULLIF(u.display_name, ''), u.email) AS display_name,
-    u.avatar_url
+    MD5(adw.user_id::TEXT) AS anon_seed,
+    ROW_NUMBER() OVER (ORDER BY MAX(adw.watch_date) DESC) AS idx
 FROM supporter_daily_ad_watches adw
-JOIN users u ON u.id = adw.user_id
 WHERE adw.watch_date > CURRENT_DATE - INTERVAL '30 days'
-GROUP BY u.id, u.display_name, u.email, u.avatar_url
-ORDER BY MAX(adw.watch_date) DESC, COALESCE(NULLIF(u.display_name, ''), u.email)
+GROUP BY adw.user_id
+ORDER BY MAX(adw.watch_date) DESC
 LIMIT $1;
 
 -- name: ListRecentCommunityActivities :many
 SELECT
-    u.id AS actor_id,
-    COALESCE(NULLIF(u.display_name, ''), u.email) AS actor_display_name,
-    u.avatar_url AS actor_avatar_url,
+    MD5(st.user_id::TEXT) AS anon_seed,
     st.type,
     st.amount,
     st.created_at AS occurred_at
 FROM supporter_transactions st
-JOIN users u ON u.id = st.user_id
 WHERE st.type IN ('watch_ad', 'redeem')
 ORDER BY st.created_at DESC
 LIMIT $1;

@@ -257,11 +257,13 @@ func TestWaitForJoinRequiresExpectedVolunteer(t *testing.T) {
 			"room-1": {
 				{{Identity: "33333333-3333-3333-3333-333333333333"}},
 				{{Identity: "22222222-2222-2222-2222-222222222222"}},
+				{{Identity: "22222222-2222-2222-2222-222222222222"}},
 			},
 		},
 	}
 	svc := NewService(&stubQuerier{}, nil, lk, nil)
 	svc.answerPollInterval = time.Millisecond
+	svc.answerJoinGrace = time.Millisecond
 	svc.answerTimeout = 20 * time.Millisecond
 
 	joined := svc.waitForJoin(
@@ -273,6 +275,32 @@ func TestWaitForJoinRequiresExpectedVolunteer(t *testing.T) {
 	)
 	if !joined {
 		t.Fatal("waitForJoin() = false, want true for expected volunteer")
+	}
+}
+
+func TestWaitForJoinRejectsImmediateVolunteerHangup(t *testing.T) {
+	lk := &stubLiveKit{
+		participants: map[string][][]*lkproto.ParticipantInfo{
+			"room-1": {
+				{{Identity: "22222222-2222-2222-2222-222222222222"}},
+				nil,
+			},
+		},
+	}
+	svc := NewService(&stubQuerier{}, nil, lk, nil)
+	svc.answerPollInterval = time.Millisecond
+	svc.answerJoinGrace = time.Millisecond
+	svc.answerTimeout = 5 * time.Millisecond
+
+	joined := svc.waitForJoin(
+		context.Background(),
+		"room-1",
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+		svc.answerTimeout,
+	)
+	if joined {
+		t.Fatal("waitForJoin() = true, want false after immediate hangup")
 	}
 }
 
@@ -289,6 +317,7 @@ func TestMatchCandidatesEndsVolunteerCallWhenNoAnswer(t *testing.T) {
 	)
 	svc.SetRealtimeHub(hub)
 	svc.answerPollInterval = time.Millisecond
+	svc.answerJoinGrace = 0
 	svc.answerTimeout = 3 * time.Millisecond
 
 	result, err := svc.matchCandidates(
@@ -354,6 +383,7 @@ func TestMatchCandidatesIgnoresLateWrongVolunteerAndMatchesExpected(t *testing.T
 	)
 	svc.SetRealtimeHub(hub)
 	svc.answerPollInterval = time.Millisecond
+	svc.answerJoinGrace = 0
 	svc.answerTimeout = 3 * time.Millisecond
 
 	result, err := svc.matchCandidates(
