@@ -105,6 +105,8 @@ class ToolRouter:
         )
         handlers.update(
             {
+                "make_voice_call": self._make_voice_call,
+                "make_video_call": self._make_video_call,
                 "call_family_contact": self._call_family_contact,
                 "call_support_contact": self._call_support_contact,
                 "activate_camera": self._activate_camera,
@@ -119,8 +121,10 @@ class ToolRouter:
                 "escalate_to_family": self._escalate_to_family,
                 "control_music": self._music_disabled,
                 "navigate_to": self._navigate_to,
+                "escalate_to_volunteer": self._call_support_contact,
                 "web_search": self._web_search,
                 "get_location": self._get_location,
+                "get_current_location": self._get_location,
                 "update_location": self._update_location,
                 "answer_incoming_call": self._answer_incoming_call,
                 "decline_incoming_call": self._decline_incoming_call,
@@ -252,6 +256,16 @@ class ToolRouter:
             except Exception as exc:
                 logger.warning("schedule_reminder RPC failed: %s", exc)
         return result
+
+    async def _make_voice_call(self, args: dict[str, Any]) -> dict[str, Any]:
+        params = dict(args)
+        params["call_type"] = "voice"
+        return await self._call_family_contact(params)
+
+    async def _make_video_call(self, args: dict[str, Any]) -> dict[str, Any]:
+        params = dict(args)
+        params["call_type"] = "video"
+        return await self._call_family_contact(params)
 
     async def _call_family_contact(self, args: dict[str, Any]) -> dict[str, Any]:
         call_type = self._normalize_call_type(args.get("call_type"))

@@ -45,6 +45,20 @@ TOOL_SPECS = (
         {"contact_name": ParameterSpec(STRING, "Tên liên hệ tùy chọn.")},
     ),
     ToolSpec(
+        "make_voice_call",
+        "Alias tương thích cũ để gọi thoại cho người nhà theo tên hoặc vai trò. "
+        "Ưu tiên dùng call_family_contact cho intent mới.",
+        {"contact_name": ParameterSpec(STRING, "Tên hoặc quan hệ của người nhà cần gọi.")},
+        ["contact_name"],
+    ),
+    ToolSpec(
+        "make_video_call",
+        "Alias tương thích cũ để gọi video cho người nhà theo tên hoặc vai trò. "
+        "Ưu tiên dùng call_family_contact với call_type=video cho intent mới.",
+        {"contact_name": ParameterSpec(STRING, "Tên hoặc quan hệ của người nhà cần gọi.")},
+        ["contact_name"],
+    ),
+    ToolSpec(
         "call_family_contact",
         "Gọi điện/video cho người nhà theo tên hoặc vai trò (mẹ, anh, chị, con...). "
         "Chỉ gọi khi user nói RÕ TÊN hoặc VAI TRÒ. "
@@ -179,6 +193,15 @@ TOOL_SPECS = (
         },
     ),
     ToolSpec(
+        "escalate_to_volunteer",
+        "Alias tương thích cũ để gọi tình nguyện viên/người hỗ trợ. "
+        "Ưu tiên dùng call_support_contact cho intent mới.",
+        {
+            "contact_name": ParameterSpec(STRING, "Tên tùy chọn. Để trống để tìm volunteer."),
+            "call_type": ParameterSpec(STRING, "Loại cuộc gọi: voice hoặc video. Mặc định voice."),
+        },
+    ),
+    ToolSpec(
         "navigate_to",
         "Mở bản đồ và chỉ đường đến địa điểm. Gọi khi user nói 'dẫn tới...', 'chỉ đường...', 'mở bản đồ'.",
         {"destination": ParameterSpec(STRING, "Điểm đến.")},
@@ -209,6 +232,10 @@ TOOL_SPECS = (
         "get_location",
         "Lấy vị trí hiện tại từ điện thoại người dùng. "
         "Gọi khi user hỏi 'tôi đang ở đâu', 'vị trí hiện tại'.",
+    ),
+    ToolSpec(
+        "get_current_location",
+        "Alias tương thích cũ của get_location để lấy vị trí hiện tại từ điện thoại người dùng.",
     ),
     ToolSpec(
         "update_location",

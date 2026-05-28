@@ -37,7 +37,7 @@ TOOL_ROUTING_INSTRUCTIONS = """
 - KHÔNG bao giờ nói "để tôi cập nhật", "tôi sẽ kiểm tra", "let me check" — gọi tool im lặng.
 - Camera: chỉ mở khi user nói rõ "mở camera"/"bật camera"/"xem giúp" HOẶC đã đồng ý rõ ràng.
 - Nếu mơ hồ ("cái này là gì", "đọc cái này"): hỏi 1 câu "Bạn muốn mở camera để xem không?"
-- Tắt camera: gọi deactivate_camera ngay khi user nói tắt/dừng/thôi.
+- Tắt camera: gọi deactivate_camera ngay khi user nói tắt/tắt đi/dừng/thôi.
 - web_search: chỉ khi cần thông tin mới (tin tức, thời tiết, giá cả, sự kiện). Không cho kiến thức cố định.
 """
 
