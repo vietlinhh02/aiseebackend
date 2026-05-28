@@ -6,11 +6,11 @@ import (
 )
 
 func TestNextOccurrence_FutureToday(t *testing.T) {
-	now := time.Now().In(hcmTZ)
+	now := time.Date(2026, 5, 29, 10, 30, 0, 0, hcmTZ)
 	future := now.Add(2 * time.Hour)
 	timeStr := future.Format("15:04")
 
-	got, err := nextOccurrence(timeStr)
+	got, err := nextOccurrenceAt(timeStr, now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -30,11 +30,11 @@ func TestNextOccurrence_FutureToday(t *testing.T) {
 }
 
 func TestNextOccurrence_PastToday(t *testing.T) {
-	now := time.Now().In(hcmTZ)
+	now := time.Date(2026, 5, 29, 10, 30, 0, 0, hcmTZ)
 	past := now.Add(-2 * time.Hour)
 	timeStr := past.Format("15:04")
 
-	got, err := nextOccurrence(timeStr)
+	got, err := nextOccurrenceAt(timeStr, now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

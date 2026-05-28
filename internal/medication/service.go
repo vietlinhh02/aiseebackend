@@ -477,6 +477,10 @@ func parseReminderKey(key string) (string, int, error) {
 // returns the next occurrence (today if in the future,
 // tomorrow if already past).
 func nextOccurrence(timeStr string) (time.Time, error) {
+	return nextOccurrenceAt(timeStr, time.Now().In(hcmTZ))
+}
+
+func nextOccurrenceAt(timeStr string, now time.Time) (time.Time, error) {
 	parts := strings.SplitN(timeStr, ":", 2)
 	if len(parts) != 2 {
 		return time.Time{}, fmt.Errorf(
@@ -507,7 +511,7 @@ func nextOccurrence(timeStr string) (time.Time, error) {
 		)
 	}
 
-	now := time.Now().In(hcmTZ)
+	now = now.In(hcmTZ)
 	candidate := time.Date(
 		now.Year(), now.Month(), now.Day(),
 		hour, minute, 0, 0, hcmTZ,
