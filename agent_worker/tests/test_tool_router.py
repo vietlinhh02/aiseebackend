@@ -201,7 +201,7 @@ async def test_router_support_call_alias_uses_timeout_backend_call():
             "mode": "volunteer",
             "room_name": "vol-1",
             "token": "caller-token",
-            "call_type": "voice",
+            "call_type": "video",
             "contact_id": "v1",
             "contact_name": "Tình nguyện viên",
             "contact_role": "volunteer",
@@ -213,8 +213,9 @@ async def test_router_support_call_alias_uses_timeout_backend_call():
     result = await router.call("call_support_contact", {})
 
     assert result["status"] == "answered"
+    # Support calls are always forced to video — the volunteer needs to see.
     assert backend.calls == [
-        ("tool_call_with_timeout", "call_support_contact", "u1", {"contact_name": "", "call_type": "voice"}, 45.0)
+        ("tool_call_with_timeout", "call_support_contact", "u1", {"contact_name": "", "call_type": "video"}, 45.0)
     ]
     event, timeout = transport.tool_requests[0]
     assert event.payload["name"] == "start_call"

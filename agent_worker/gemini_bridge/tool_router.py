@@ -348,8 +348,16 @@ class ToolRouter:
             )
 
         contact_name = str(args.get("contact_name") or "")
-        call_type = self._normalize_call_type(args.get("call_type"))
+        # Support/volunteer calls are ALWAYS video calls.
+        # The purpose is for the volunteer to see and help the user (e.g.,
+        # read text, describe objects, guide navigation). Audio-only defeats
+        # this purpose. If Gemini doesn't explicitly send call_type=video,
+        # we force it here.
+        call_type = "video"
         self.runtime_state.on_call_intent("support", contact_name)
+        logger.info(
+            "support call forced to video contact=%s", contact_name,
+        )
 
         result = await self.backend.tool_call_with_timeout(
             GeminiTool.CALL_SUPPORT_CONTACT,
