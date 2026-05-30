@@ -80,6 +80,22 @@ class GoogleSDKBridge:
         router.runtime_state.set_camera_deactivate_callback(
             lambda: router._deactivate_camera({}),
         )
+
+        # Wire cross-session memory manager
+        user_id = user_context.get("user_id", "")
+        if user_id:
+            from .agent_runtime_state import AgentRuntimeState
+            runtime_state = AgentRuntimeState(
+                session_id=room.name,
+                user_id=user_id,
+                backend=backend,
+            )
+            router.runtime_state = runtime_state
+            try:
+                await runtime_state.load_persisted_memory()
+            except Exception as exc:
+                self.logger.warning("load persisted memory failed: %s", exc)
+            runtime_state.start_memory_periodic_save()
         audio_publisher = AgentAudioPublisher(
             local_participant=local,
             sample_rate=GEMINI_RESPONSE_AUDIO_SAMPLE_RATE,
@@ -218,6 +234,12 @@ class GoogleSDKBridge:
             ended_at_time = datetime.now(timezone.utc)
             ended_at = ended_at_time.isoformat()
             active_gemini_session["session"] = None
+            # Persist memory to backend before closing
+            if user_id and router.runtime_state:
+                try:
+                    await router.runtime_state.shutdown_memory()
+                except Exception as exc:
+                    self.logger.warning("shutdown memory failed: %s", exc)
             await cancel_track_tasks(track_tasks)
             if user_context.get("user_id") and ai_usage_started_at:
                 try:

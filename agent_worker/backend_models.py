@@ -88,3 +88,20 @@ class TrackingEventPayload(BackendPayload):
     source: str = Field(default="agent_worker", min_length=1)
     source_id: str = Field(default="unknown", min_length=1)
     metadata: dict[str, Any]
+
+
+class SessionMemoryTurnPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    role: str = Field(min_length=1)
+    text: str = ""
+
+
+class SessionMemorySavePayload(BackendPayload):
+    user_id: str = Field(min_length=1)
+    session_id: str = ""
+    summary: str = ""
+    recent_turns: list[SessionMemoryTurnPayload] = Field(default_factory=list)
+    user_facts: list[str] = Field(default_factory=list)
+    last_intent: str = ""
+    pending_tasks: list[str] = Field(default_factory=list)
+    last_mode: str = "normal"

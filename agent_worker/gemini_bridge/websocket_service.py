@@ -445,17 +445,37 @@ class GeminiBridgeWebSocketService:
         transport = GeminiBridgeWebSocketTransport(websocket=websocket, log=self.log)
         session_context = await transport.read_session_init()
 
+        # We need backend early for memory manager — create a temporary one
+        # (will be replaced by tool_router.backend after tool router is built)
+        from backend import BackendClient
+        from config import GO_BACKEND_URL, INTERNAL_API_KEY
+        early_backend = BackendClient(GO_BACKEND_URL, INTERNAL_API_KEY)
+
         # Restore runtime state from snapshot (reconnect) or create fresh
         snapshot = session_context.get("runtime_state_snapshot")
         if isinstance(snapshot, dict) and snapshot:
-            runtime_state = AgentRuntimeState.from_snapshot(snapshot)
+            runtime_state = AgentRuntimeState.from_snapshot(snapshot, backend=early_backend)
             self.log.info("restored runtime state from snapshot: mode=%s camera=%s",
                           runtime_state.conversation_mode, runtime_state.camera.enabled)
         else:
             runtime_state = AgentRuntimeState(
                 session_id=str(session_context.get("session_id") or ""),
                 user_id=str(session_context.get("user_id") or ""),
+                backend=early_backend,
             )
+
+        # Load persisted cross-session memory from DB
+        user_id_for_memory = str(session_context.get("user_id") or "")
+        if user_id_for_memory and runtime_state.memory_manager:
+            try:
+                persisted = await runtime_state.load_persisted_memory()
+                if persisted.found:
+                    self.log.info(
+                        "loaded persisted memory: summary=%d chars, facts=%d",
+                        len(persisted.summary), len(persisted.user_facts),
+                    )
+            except Exception as exc:
+                self.log.warning("load persisted memory failed: %s", exc)
 
         # Create safe executor wrapping the transport
         executor = SafeToolExecutor(
@@ -470,6 +490,10 @@ class GeminiBridgeWebSocketService:
             AgentState.SPEAKING if state == "activated" else AgentState.IDLE,
         )
         backend = tool_router.backend
+
+        # Update memory manager to use the tool router's backend (may be different instance)
+        if runtime_state.memory_manager:
+            runtime_state.memory_manager.backend = backend
         usage_tracker = AIUsageSessionTracker(
             backend=backend,
             session_context=session_context,
@@ -491,6 +515,9 @@ class GeminiBridgeWebSocketService:
         )
         session_started_at: datetime | None = None
         session_failed = False
+
+        # Start periodic memory persistence
+        runtime_state.start_memory_periodic_save()
 
         async def _emit_tracking(backend_client, event_type: str) -> None:
             if not user_id:
@@ -551,6 +578,12 @@ class GeminiBridgeWebSocketService:
         else:
             await _emit_tracking(backend, "ai_session_ended")
         finally:
+            # Persist memory to backend before closing
+            with suppress(Exception):
+                await runtime_state.shutdown_memory()
+            # Close the early backend client (memory manager now uses tool_router.backend)
+            with suppress(Exception):
+                await early_backend.close()
             # Mark all pending device commands as interrupted
             interrupted = executor.on_disconnect()
             if interrupted:

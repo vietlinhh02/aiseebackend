@@ -10,6 +10,8 @@ from backend_models import (
     BackendJSONResponse,
     BackendPayload,
     QuotaCheckPayload,
+    SessionMemorySavePayload,
+    SessionMemoryTurnPayload,
     ToolCallPayload,
     TrackingEventPayload,
     UsageRecordPayload,
@@ -264,3 +266,54 @@ class BackendClient:
     async def close(self):
         if self._owns_client:
             await self.client.aclose()
+
+    # ── Session memory persistence ──
+
+    async def save_session_memory(
+        self,
+        user_id: str,
+        session_id: str,
+        summary: str = "",
+        recent_turns: list[dict[str, str]] | None = None,
+        user_facts: list[str] | None = None,
+        last_intent: str = "",
+        pending_tasks: list[str] | None = None,
+        last_mode: str = "normal",
+    ) -> dict[str, Any]:
+        """Persist session memory to Go backend."""
+        turns = [
+            SessionMemoryTurnPayload(role=t.get("role", ""), text=t.get("text", ""))
+            for t in (recent_turns or [])
+        ]
+        return await self._post_json(
+            "/session-memory/save",
+            SessionMemorySavePayload(
+                user_id=user_id,
+                session_id=session_id,
+                summary=summary,
+                recent_turns=turns,
+                user_facts=user_facts or [],
+                last_intent=last_intent,
+                pending_tasks=pending_tasks or [],
+                last_mode=last_mode,
+            ),
+            log_name="save_session_memory",
+        )
+
+    async def load_session_memory(
+        self,
+        user_id: str,
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        """Load most recent session memory from Go backend."""
+        params: dict[str, str] = {"user_id": user_id}
+        if session_id:
+            params["session_id"] = session_id
+        resp = await self.client.get(
+            "/session-memory/load",
+            params=params,
+            headers={"X-Internal-Key": self.api_key},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        return BackendJSONResponse.model_validate(resp.json()).root

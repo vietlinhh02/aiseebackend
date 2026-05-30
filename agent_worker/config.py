@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     assistant_ws_host: str = Field("0.0.0.0", alias="ASSISTANT_WS_HOST")
     assistant_ws_port: int = Field(8765, alias="ASSISTANT_WS_PORT")
 
+    # Memory / session persistence
+    memory_summary_interval: int = Field(10, alias="MEMORY_SUMMARY_INTERVAL")
+    memory_max_turns: int = Field(20, alias="MEMORY_MAX_TURNS")
+    memory_save_interval_seconds: float = Field(120.0, alias="MEMORY_SAVE_INTERVAL_SECONDS")
+
     @field_validator("ai_cost_pricing_version", mode="before")
     @classmethod
     def default_ai_cost_pricing_version(cls, value):
@@ -86,3 +91,6 @@ EXA_SEARCH_MAX_RESULTS = settings.exa_search_max_results
 AI_TRANSPORT = settings.ai_transport.lower()
 ASSISTANT_WS_HOST = settings.assistant_ws_host
 ASSISTANT_WS_PORT = settings.assistant_ws_port
+MEMORY_SUMMARY_INTERVAL = settings.memory_summary_interval
+MEMORY_MAX_TURNS = settings.memory_max_turns
+MEMORY_SAVE_INTERVAL_SECONDS = settings.memory_save_interval_seconds

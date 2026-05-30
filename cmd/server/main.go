@@ -28,6 +28,7 @@ import (
 	"github.com/team-dang/aiseebackend/internal/music"
 	"github.com/team-dang/aiseebackend/internal/supporter"
 	"github.com/team-dang/aiseebackend/internal/toolcall"
+	"github.com/team-dang/aiseebackend/internal/sessionmemory"
 	"github.com/team-dang/aiseebackend/internal/tracking"
 	"github.com/team-dang/aiseebackend/internal/upload"
 	"github.com/team-dang/aiseebackend/internal/user"
@@ -222,6 +223,8 @@ func main() {
 		trackingService,
 	)
 
+	sessionMemoryHandler := sessionmemory.NewHandler(pool)
+
 	adminStore := admin.NewStore(pool)
 	adminService := admin.NewService(adminStore, billingService)
 	adminHandler := admin.NewHandler(adminService)
@@ -365,6 +368,11 @@ func main() {
 		r.Post("/usage/grant", billingHandler.GrantUsageQuota)
 		r.Post("/ai-cost/record", billingHandler.RecordAICostEvent)
 		r.Post("/tracking/events", trackingHandler.RecordEvent)
+
+		// Session memory persistence for AI agent
+		r.Post("/session-memory/save", sessionMemoryHandler.Save)
+		r.Get("/session-memory/load", sessionMemoryHandler.Load)
+		r.Delete("/session-memory", sessionMemoryHandler.Delete)
 	})
 
 	r.Post("/api/webhooks/revenuecat", billingHandler.RevenueCatWebhook)

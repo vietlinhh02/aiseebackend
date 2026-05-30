@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from .event_log import ConversationEventLog, EventType
+from .memory_manager import MemoryManager, PersistedMemory
 
 logger = logging.getLogger("aisee-agent")
 
@@ -226,9 +227,10 @@ class AgentRuntimeState:
     - Tool execution (in-flight, dedup, timeout)
     - Call flow (state machine)
     - Conversation memory (rolling summary, recent turns)
+    - Cross-session memory (via MemoryManager)
     """
 
-    def __init__(self, session_id: str = "", user_id: str = "") -> None:
+    def __init__(self, session_id: str = "", user_id: str = "", backend: Any = None) -> None:
         self.session_id = session_id
         self.user_id = user_id
         self.conversation_mode = "normal"  # normal / camera_assist / call_flow / emergency_flow / navigation_flow
@@ -241,6 +243,15 @@ class AgentRuntimeState:
         self.updated_at = time.monotonic()
         self._camera_watchdog_task: asyncio.Task | None = None
         self._camera_deactivate_callback: Callable[[], Awaitable[None]] | None = None
+
+        # Cross-session memory manager (optional, wired up by service layer)
+        self.memory_manager: MemoryManager | None = None
+        if backend and user_id:
+            self.memory_manager = MemoryManager(
+                backend=backend,
+                user_id=user_id,
+                session_id=session_id,
+            )
 
     # ── Camera lifecycle ──
 
@@ -488,25 +499,53 @@ class AgentRuntimeState:
         self.updated_at = time.monotonic()
         return cancelled
 
+    # ── Cross-session memory lifecycle ──
+
+    async def load_persisted_memory(self) -> PersistedMemory:
+        """Load cross-session memory from backend. Returns loaded memory."""
+        if not self.memory_manager:
+            return PersistedMemory()
+        return await self.memory_manager.load_from_backend()
+
+    def start_memory_periodic_save(self) -> None:
+        """Start background periodic memory persistence."""
+        if self.memory_manager:
+            self.memory_manager.start_periodic_save()
+
+    async def shutdown_memory(self) -> None:
+        """Shutdown memory manager and do final save."""
+        if self.memory_manager:
+            await self.memory_manager.shutdown()
+
     # ── Memory ──
 
     def add_user_turn(self, text: str) -> None:
         self.memory.add_turn("user", text)
         self.event_log.record(EventType.USER_SPEECH, {"text": text})
+        if self.memory_manager:
+            self.memory_manager.add_user_turn(text)
         self.updated_at = time.monotonic()
 
     def add_assistant_turn(self, text: str) -> None:
         self.memory.add_turn("assistant", text)
         self.event_log.record(EventType.ASSISTANT_RESPONSE, {"text": text})
+        if self.memory_manager:
+            self.memory_manager.add_assistant_turn(text)
         self.updated_at = time.monotonic()
 
     def get_reconnect_context(self) -> str:
         """Build context string for Gemini session restore.
 
-        Uses memory.rolling_summary (persisted in snapshot) and event_log
-        (current session) to build the most complete context.
+        Uses memory_manager (cross-session) first, then falls back to
+        event_log and in-memory state for current session context.
         """
-        # Use memory summary if event_log has no summary yet (reconnect case)
+        # Prefer memory manager's context (includes cross-session data)
+        if self.memory_manager:
+            mm_context = self.memory_manager.build_context_for_gemini()
+            if mm_context:
+                return mm_context
+
+        # Fallback: use event_log + in-memory state
         summary = self.event_log.rolling_summary or self.memory.rolling_summary
         if not summary and not self.event_log.event_count:
             return ""
@@ -586,7 +625,7 @@ class AgentRuntimeState:
         # Sync event_log summary into memory for snapshot persistence
         if self.event_log.rolling_summary:
             self.memory.rolling_summary = self.event_log.rolling_summary
-        return {
+        snapshot = {
             "session_id": self.session_id,
             "user_id": self.user_id,
             "conversation_mode": self.conversation_mode,
@@ -595,12 +634,17 @@ class AgentRuntimeState:
             "call": self.call.to_dict(),
             "memory": self.memory.to_dict(),
         }
+        # Include memory manager snapshot for client-side fallback
+        if self.memory_manager:
+            snapshot["memory_manager"] = self.memory_manager.get_snapshot()
+        return snapshot
 
     @classmethod
-    def from_snapshot(cls, data: dict[str, Any]) -> AgentRuntimeState:
+    def from_snapshot(cls, data: dict[str, Any], backend: Any = None) -> AgentRuntimeState:
         state = cls(
             session_id=data.get("session_id", ""),
             user_id=data.get("user_id", ""),
+            backend=backend,
         )
         state.conversation_mode = data.get("conversation_mode", "normal")
         if "camera" in data:
@@ -616,4 +660,12 @@ class AgentRuntimeState:
             mem_data = data["memory"]
             state.memory.rolling_summary = mem_data.get("rolling_summary", "")
             state.memory.last_user_intent = mem_data.get("last_user_intent")
+        # Restore memory manager data from client-side snapshot (fallback)
+        if "memory_manager" in data and state.memory_manager:
+            mm_data = data["memory_manager"]
+            state.memory_manager.rolling_summary = mm_data.get("summary", "")
+            state.memory_manager.recent_turns = mm_data.get("recent_turns", [])
+            state.memory_manager.user_facts = mm_data.get("user_facts", [])
+            state.memory_manager.last_intent = mm_data.get("last_intent", "")
+            state.memory_manager.pending_tasks = mm_data.get("pending_tasks", [])
         return state
