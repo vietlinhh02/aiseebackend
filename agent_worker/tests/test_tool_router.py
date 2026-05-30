@@ -252,8 +252,8 @@ async def test_router_blocks_camera_without_explicit_consent():
 
     result = await router.call("activate_camera", {"reason": "Đọc nhãn thuốc"})
 
-    assert result["status"] == "blocked"
-    assert result["error"] == "camera_consent_required"
+    assert result["status"] == "error"
+    assert result["code"] == "CAMERA_CONSENT_REQUIRED"
     assert participant.rpc_calls == []
     assert backend.calls == []
 
@@ -403,7 +403,8 @@ async def test_router_control_music_is_temporarily_disabled_without_device_reque
 
     result = await router.call("control_music", {"action": "stop"})
 
-    assert result["status"] == "disabled"
+    assert result["status"] == "error"
+    assert result["code"] == "DEVICE_UNAVAILABLE"
     assert transport.tool_requests == []
 
 

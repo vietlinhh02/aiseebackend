@@ -11,6 +11,9 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
+from .agent_runtime_state import AgentRuntimeState
+from .contracts import ControlAction, MediaMode
+from .event_log import EventType
 from .nsfw_filter import NsfwFilter, logger as nsfw_logger
 from .schemas import build_gemini_tools
 from .state import AgentState
@@ -35,10 +38,18 @@ TOOL_ROUTING_INSTRUCTIONS = """
 === TOOL CALL RULES ===
 - Gọi tool ngay lập tức, không nói gì trước khi gọi tool.
 - KHÔNG bao giờ nói "để tôi cập nhật", "tôi sẽ kiểm tra", "let me check" — gọi tool im lặng.
-- Camera: chỉ mở khi user nói rõ "mở camera"/"bật camera"/"xem giúp" HOẶC đã đồng ý rõ ràng.
+- Camera: chỉ mở khi user nói rõ "mở camera"/"bật camera"/"xem giúp"/"bật lại camera" HOẶC đã đồng ý rõ ràng.
 - Nếu mơ hồ ("cái này là gì", "đọc cái này"): hỏi 1 câu "Bạn muốn mở camera để xem không?"
 - Tắt camera: gọi deactivate_camera ngay khi user nói tắt/tắt đi/dừng/thôi.
 - web_search: chỉ khi cần thông tin mới (tin tức, thời tiết, giá cả, sự kiện). Không cho kiến thức cố định.
+
+=== TOOL ERROR HANDLING ===
+- Khi tool_result có status=error: đọc message để hiểu lý do.
+- Nếu recoverable=true: có thể thử lại hoặc đề xuất cách khác.
+- Nếu recoverable=false: không thử lại, giải thích cho user.
+- Camera bị NSFW block: camera đã OFF hoàn toàn. Khi user muốn bật lại, PHẢI gọi activate_camera từ đầu.
+- Tool timeout: nói "thao tác bị quá thời gian, mình thử lại nhé" hoặc đề xuất cách khác.
+- KHÔNG bao giờ nói mã lỗi technical cho user. Chỉ nói lý do bằng ngôn ngữ tự nhiên.
 """
 
 logger = logging.getLogger("aisee-agent")
@@ -242,10 +253,15 @@ class GeminiTransportSession:
     settings: GeminiLiveSettings
     transport: GeminiTransport
     tool_router: ToolRouter
+    runtime_state: AgentRuntimeState | None = None
     nsfw_filter: NsfwFilter | None = None
     backend: object | None = None
     user_id: str = ""
     session_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.runtime_state is None:
+            self.runtime_state = self.tool_router.runtime_state
 
     async def run(self, gemini_session) -> None:
         state_publisher = TransportStatePublisher(transport=self.transport)
@@ -255,6 +271,8 @@ class GeminiTransportSession:
             state_publisher=state_publisher,
         )
         await self.transport.emit_ready()
+        # Inject reconnect context if state was restored
+        await self._inject_reconnect_context(gemini_session)
         await state_publisher.publish(AgentState.IDLE)
         inbound_task = asyncio.create_task(
             self._forward_inbound_loop(gemini_session, state_publisher)
@@ -334,20 +352,27 @@ class GeminiTransportSession:
                 return
 
     async def _handle_control_event(self, gemini_session, event, state_publisher) -> None:
-        if event.action in {"wake", "wake_greeting"}:
+        if event.action in {ControlAction.WAKE, ControlAction.WAKE_GREETING}:
             await state_publisher.publish(AgentState.THINKING)
             await send_wake_greeting(gemini_session)
             return
-        if event.action == "incoming_call":
+        if event.action == ControlAction.INCOMING_CALL:
             await state_publisher.publish(AgentState.THINKING)
             await announce_incoming_call(gemini_session, event.payload)
             return
-        if event.action == "incoming_call_cleared":
+        if event.action == ControlAction.INCOMING_CALL_CLEARED:
             return
-        if event.action == "interrupt":
+        if event.action == ControlAction.INTERRUPT:
             await state_publisher.publish(AgentState.IDLE)
             return
-        if event.action == "nsfw_detected":
+        if event.action == ControlAction.NSFW_DETECTED:
+            # Update runtime state — camera is now blocked
+            if self.runtime_state is not None:
+                self.runtime_state.on_camera_blocked("nsfw_detected")
+            # Reset transport media_mode to audio so subsequent audio frames
+            # are not misinterpreted as camera frames.
+            if hasattr(self.transport, 'media_mode'):
+                self.transport.media_mode = MediaMode.AUDIO
             await state_publisher.publish(AgentState.THINKING)
             await send_nsfw_warning(gemini_session)
             if self.backend is not None and self.user_id:
@@ -370,10 +395,34 @@ class GeminiTransportSession:
         logger.info("ignoring unsupported control action=%s", event.action)
 
 
+    async def _inject_reconnect_context(self, gemini_session) -> None:
+        """Inject session context into Gemini after reconnect.
+
+        If the runtime state was restored from a snapshot, send a brief
+        context message so Gemini knows what happened before.
+        """
+        if self.runtime_state is None:
+            return
+        context = self.runtime_state.get_reconnect_context()
+        if not context:
+            return
+        try:
+            await gemini_session.send_realtime_input(text=context)
+            self.logger.info("injected reconnect context (%d chars)", len(context))
+            self.runtime_state.event_log.record(
+                EventType.CONTEXT_INJECTION,
+                {"chars": len(context), "mode": self.runtime_state.conversation_mode},
+            )
+        except Exception as exc:
+            self.logger.warning("failed to inject reconnect context: %s", exc)
+
+
 NSFW_WARNING_TEXT = (
-    "Camera đã tạm tắt vì phát hiện nội dung không phù hợp. "
-    "Hãy thông báo ngắn gọn cho người dùng biết camera đã tạm dừng "
-    "và đề nghị hướng camera vào nội dung phù hợp hơn."
+    "Camera đã bị tắt tự động vì phát hiện nội dung không phù hợp. "
+    "Camera hiện đã OFF hoàn toàn. "
+    "Hãy thông báo ngắn gọn cho người dùng: camera đã tắt vì nội dung không phù hợp, "
+    "và đề nghị hướng camera vào nội dung phù hợp hơn. "
+    "Nếu người dùng muốn bật lại, bạn PHẢI gọi tool activate_camera lại từ đầu."
 )
 
 

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai import errors as genai_errors
 
+from gemini_bridge.agent_runtime_state import AgentRuntimeState
 from gemini_bridge.core import GeminiLiveSettings, GeminiTransportSession
 from gemini_bridge.state import AgentState
 from gemini_bridge.transport import InboundAudioEvent, ToolRequestEvent, TransportStatePublisher
@@ -41,6 +42,7 @@ class FakeTransport:
 class FakeRouter:
     def __init__(self):
         self.calls = []
+        self.runtime_state = AgentRuntimeState()
 
     async def call(self, name, args):
         self.calls.append((name, args))

@@ -16,7 +16,17 @@ from websockets.exceptions import ConnectionClosed
 
 from config import AI_COST_PRICING_VERSION
 
+from .agent_runtime_state import AgentRuntimeState
+from .contracts import (
+    MEDIA_MODE_NORMALIZE,
+    ControlAction,
+    MediaMode,
+    WsInboundType,
+    WsOutboundType,
+    tool_timeout,
+)
 from .core import GeminiLiveSettings, GeminiTransportSession
+from .safe_tool_executor import SafeToolExecutor
 from .nsfw_filter import NsfwFilter
 from .state import AgentState
 from .tool_router import ToolRouter
@@ -56,6 +66,7 @@ class GeminiBridgeWebSocketTransport:
     media_mode: str = "audio"
     on_audio_start: Callable[[], Any] | None = None
     on_audio_stop: Callable[[], Any] | None = None
+    default_tool_timeout: float = 20.0
     session_context: dict[str, Any] = field(default_factory=dict, init=False)
     _prefetched: asyncio.Queue[str | bytes] = field(default_factory=asyncio.Queue, init=False)
     _pending_tool_results: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -64,17 +75,17 @@ class GeminiBridgeWebSocketTransport:
     )
 
     async def emit_ready(self) -> None:
-        await self._send_json({"type": "ready"})
+        await self._send_json({"type": WsOutboundType.READY})
 
     async def emit_state(self, state: AgentState) -> None:
-        await self._send_json({"type": "agent_state", "state": state.value})
+        await self._send_json({"type": WsOutboundType.AGENT_STATE, "state": state.value})
 
     async def emit_audio(self, pcm: bytes) -> None:
         if pcm:
             await self.websocket.send(pcm)
 
     async def emit_audio_interrupted(self) -> None:
-        await self._send_json({"type": "assistant_audio_interrupted"})
+        await self._send_json({"type": WsOutboundType.ASSISTANT_AUDIO_INTERRUPTED})
 
     async def emit_error(
         self,
@@ -83,8 +94,8 @@ class GeminiBridgeWebSocketTransport:
         *,
         request_id: str = "",
     ) -> None:
-        payload = {
-            "type": "error",
+        payload: dict[str, Any] = {
+            "type": WsOutboundType.ERROR,
             "code": code,
             "message": message,
         }
@@ -104,11 +115,22 @@ class GeminiBridgeWebSocketTransport:
             "request_id": event.request_id,
             **event.payload,
         }
-        if timeout is not None:
-            payload["timeout_ms"] = int(timeout * 1000)
+        effective_timeout = timeout if timeout is not None else self.default_tool_timeout
+        if effective_timeout is not None:
+            payload["timeout_ms"] = int(effective_timeout * 1000)
         await self._send_json(payload)
         try:
+            if effective_timeout is not None:
+                return await asyncio.wait_for(future, timeout=effective_timeout)
             return await future
+        except asyncio.TimeoutError:
+            logger.warning(
+                "tool_request timeout request_id=%s name=%s timeout=%.1fs",
+                event.request_id,
+                event.name,
+                effective_timeout,
+            )
+            return tool_timeout(event.name, effective_timeout)
         finally:
             self._pending_tool_results.pop(event.request_id, None)
 
@@ -152,7 +174,7 @@ class GeminiBridgeWebSocketTransport:
             return await self._decode_inbound_json(raw)
         if isinstance(raw, (bytes, bytearray, memoryview)):
             payload = bytes(raw)
-            if self.media_mode == "camera":
+            if self.media_mode == MediaMode.CAMERA:
                 return InboundVideoEvent(jpeg=payload)
             return InboundAudioEvent(pcm=payload)
         await self.emit_error("invalid_frame", "expected text json or binary media frame")
@@ -172,36 +194,36 @@ class GeminiBridgeWebSocketTransport:
         payload_map = payload if isinstance(payload, dict) else {}
         message_type = self._string_value(decoded.get("type"))
 
-        if message_type == "text":
+        if message_type == WsInboundType.TEXT:
             text = self._string_value(decoded.get("text") or payload_map.get("text"))
             if not text:
                 await self.emit_error("invalid_text", "text frame requires a non-empty text value")
                 return None
             return InboundTextEvent(text=text)
 
-        if message_type == "control":
+        if message_type == WsInboundType.CONTROL:
             action = self._string_value(decoded.get("action") or payload_map.get("action"))
             if not action:
                 await self.emit_error("invalid_control", "control frame requires an action")
                 return None
             return InboundControlEvent(action=action, payload=payload_map)
 
-        if message_type == "audio_start":
+        if message_type == WsInboundType.AUDIO_START:
             await self._call_audio_hook(self.on_audio_start)
             return None
 
-        if message_type == "audio_stop":
+        if message_type == WsInboundType.AUDIO_STOP:
             await self._call_audio_hook(self.on_audio_stop)
             return None
 
-        if message_type == "interrupt":
-            return InboundControlEvent(action="interrupt", payload=payload_map)
+        if message_type == WsInboundType.INTERRUPT:
+            return InboundControlEvent(action=ControlAction.INTERRUPT, payload=payload_map)
 
-        if message_type == "session_init":
+        if message_type == WsInboundType.SESSION_INIT:
             self.session_context = self._session_context_from_payload(payload_map)
             return None
 
-        if message_type == "media_mode":
+        if message_type == WsInboundType.MEDIA_MODE:
             mode = self._normalize_media_mode(decoded.get("mode") or payload_map.get("mode"))
             if mode is None:
                 await self.emit_error("invalid_media_mode", "media_mode must be audio or camera")
@@ -209,17 +231,17 @@ class GeminiBridgeWebSocketTransport:
             self.media_mode = mode
             return None
 
-        if message_type == "tool_result":
+        if message_type == WsInboundType.TOOL_RESULT:
             await self._resolve_tool_result(decoded, payload_map)
             return None
 
-        if message_type == "nsfw_detected":
-            return InboundControlEvent(action="nsfw_detected", payload=payload_map)
+        if message_type == WsInboundType.NSFW_DETECTED:
+            return InboundControlEvent(action=ControlAction.NSFW_DETECTED, payload=payload_map)
 
-        if message_type == "ping":
+        if message_type == WsInboundType.PING:
             await self._send_json(
                 {
-                    "type": "pong",
+                    "type": WsOutboundType.PONG,
                     "request_id": self._string_value(decoded.get("request_id")),
                 }
             )
@@ -237,7 +259,7 @@ class GeminiBridgeWebSocketTransport:
             decoded = json.loads(raw)
         except json.JSONDecodeError:
             return None
-        if not isinstance(decoded, dict) or decoded.get("type") != "session_init":
+        if not isinstance(decoded, dict) or decoded.get("type") != WsInboundType.SESSION_INIT:
             return None
         payload = decoded.get("payload")
         if not isinstance(payload, dict):
@@ -277,18 +299,31 @@ class GeminiBridgeWebSocketTransport:
         decoded: dict[str, Any],
         payload_map: dict[str, Any],
     ) -> dict[str, Any]:
+        # Flutter sends tool results in various formats:
+        # 1. {"type":"tool_result","request_id":"...","payload":{"status":"ok",...}}
+        # 2. {"type":"tool_result","request_id":"...","result":{"status":"ok",...}}
+        # 3. {"type":"tool_result","request_id":"...","ok":false,"error":"..."}
+
+        # Prefer payload if non-empty (Flutter standard path)
         if payload_map:
             return dict(payload_map)
 
-        if decoded.get("ok") is False:
-            message = decoded.get("error") or "tool request failed"
-            return {"status": "error", "error": str(message)}
-
+        # Check top-level result field
         result = decoded.get("result")
         if isinstance(result, dict):
             return result
         if result is not None:
             return {"status": "ok", "result": result}
+
+        # Check top-level ok/error fields
+        if decoded.get("ok") is False:
+            message = decoded.get("error") or "tool request failed"
+            return {"status": "error", "error": str(message)}
+
+        # Fallback: extract any status-like fields from decoded itself
+        if "status" in decoded:
+            return {k: v for k, v in decoded.items() if k not in ("type", "request_id")}
+
         return {"status": "ok"}
 
     async def _send_json(self, payload: dict[str, Any]) -> None:
@@ -302,12 +337,8 @@ class GeminiBridgeWebSocketTransport:
 
     @staticmethod
     def _normalize_media_mode(mode: object) -> str | None:
-        normalized = GeminiBridgeWebSocketTransport._string_value(mode).lower()
-        if normalized in {"audio", "audio_pcm"}:
-            return "audio"
-        if normalized in {"camera", "camera_jpeg"}:
-            return "camera"
-        return None
+        raw = GeminiBridgeWebSocketTransport._string_value(mode).lower()
+        return MEDIA_MODE_NORMALIZE.get(raw)
 
     @staticmethod
     def _string_value(value: object) -> str:
@@ -413,7 +444,28 @@ class GeminiBridgeWebSocketService:
     async def handle(self, websocket: WebSocketConnection) -> None:
         transport = GeminiBridgeWebSocketTransport(websocket=websocket, log=self.log)
         session_context = await transport.read_session_init()
+
+        # Restore runtime state from snapshot (reconnect) or create fresh
+        snapshot = session_context.get("runtime_state_snapshot")
+        if isinstance(snapshot, dict) and snapshot:
+            runtime_state = AgentRuntimeState.from_snapshot(snapshot)
+            self.log.info("restored runtime state from snapshot: mode=%s camera=%s",
+                          runtime_state.conversation_mode, runtime_state.camera.enabled)
+        else:
+            runtime_state = AgentRuntimeState(
+                session_id=str(session_context.get("session_id") or ""),
+                user_id=str(session_context.get("user_id") or ""),
+            )
+
+        # Create safe executor wrapping the transport
+        executor = SafeToolExecutor(
+            device_channel=transport,
+            default_timeout=transport.default_tool_timeout,
+        )
+
         tool_router = self._build_tool_router(transport, session_context)
+        tool_router.runtime_state = runtime_state
+        tool_router.executor = executor
         tool_router.on_camera_state_change = lambda state: transport.emit_state(
             AgentState.SPEAKING if state == "activated" else AgentState.IDLE,
         )
@@ -431,6 +483,7 @@ class GeminiBridgeWebSocketService:
             settings=self.settings,
             transport=transport,
             tool_router=tool_router,
+            runtime_state=runtime_state,
             nsfw_filter=_load_nsfw_filter_for_service(self.log),
             backend=backend,
             user_id=user_id,
@@ -498,6 +551,11 @@ class GeminiBridgeWebSocketService:
         else:
             await _emit_tracking(backend, "ai_session_ended")
         finally:
+            # Mark all pending device commands as interrupted
+            interrupted = executor.on_disconnect()
+            if interrupted:
+                self.log.info("marked %d pending device commands as interrupted", interrupted)
+            runtime_state.on_disconnect()
             with suppress(Exception):
                 await transport.emit_state(AgentState.DISCONNECTED)
             await usage_tracker.commit()

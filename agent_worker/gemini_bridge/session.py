@@ -76,6 +76,10 @@ class GoogleSDKBridge:
             search_client=ExaSearchClient.from_env(),
             user_context=user_context,
         )
+        # Wire camera watchdog: when timeout fires, route deactivation through tool router
+        router.runtime_state.set_camera_deactivate_callback(
+            lambda: router._deactivate_camera({}),
+        )
         audio_publisher = AgentAudioPublisher(
             local_participant=local,
             sample_rate=GEMINI_RESPONSE_AUDIO_SAMPLE_RATE,

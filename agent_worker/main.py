@@ -45,12 +45,17 @@ def _build_user_context(session_context: dict) -> dict:
 
 def _build_tool_router(transport, session_context: dict) -> ToolRouter:
     user_context = _build_user_context(session_context)
-    return ToolRouter(
+    router = ToolRouter(
         backend=BackendClient(GO_BACKEND_URL, INTERNAL_API_KEY),
         device_channel=TransportDeviceCommandChannel(transport=transport),
         search_client=ExaSearchClient.from_env(),
         user_context=user_context,
     )
+    # Wire camera watchdog: when timeout fires, route deactivation through tool router
+    router.runtime_state.set_camera_deactivate_callback(
+        lambda: router._deactivate_camera({}),
+    )
+    return router
 
 
 def _build_instructions(session_context: dict) -> str:

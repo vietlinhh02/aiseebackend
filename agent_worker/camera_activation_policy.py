@@ -1,102 +1,29 @@
-"""Shared consent rules for camera activation."""
+"""Camera activation consent — delegates to IntentRouter.
+
+This file is kept for backward compatibility.  The actual classification
+is done by intent_router.classify_intent() + validate_camera_consent().
+
+The old phrase-list approach has been replaced with state-aware intent
+classification.  See intent_router.py for the implementation.
+"""
 
 from __future__ import annotations
 
-import unicodedata
+from typing import TYPE_CHECKING
 
-_EXPLICIT_CAMERA_REQUEST_PHRASES = (
-    "bật camera",
-    "mở camera",
-    "cho tôi xem",
-    "cho con xem",
-    "xem giúp",
-    "nhìn giúp",
-    "nhìn hộ",
-    "nhìn dùm",
-    "nhìn giúp tôi",
-    "mở mắt",
-    "bật máy ảnh",
-    "mở máy ảnh",
-    "quay video",
-    "chụp ảnh",
-    "xem thử",
-    "nhìn thử",
-    "look for me",
-    "show you",
-    "turn on camera",
-    "open camera",
-    "enable camera",
-    "start camera",
-    "use camera",
-    "see this",
-    "look at this",
-    "take a look",
-)
-
-_EXPLICIT_CONFIRMATION_PHRASES = (
-    "có",
-    "có mở đi",
-    "có xem đi",
-    "được",
-    "được rồi",
-    "ok",
-    "okay",
-    "uh",
-    "uh mở đi",
-    "uh xem đi",
-    "u mở đi",
-    "u xem đi",
-    "vào đi",
-    "mở đi",
-    "xem đi",
-    "bật đi",
-    "đồng ý",
-    "được thôi",
-    "mở máy đi",
-    "bật máy đi",
-    "nhìn đi",
-    "xem nào",
-    "go ahead",
-    "yes",
-    "sure",
-    "yeah",
-    "yep",
-    "yup",
-    "please do",
-    "do it",
-    "go on",
-)
+if TYPE_CHECKING:
+    from gemini_bridge.agent_runtime_state import AgentRuntimeState
 
 
 def validate_camera_activation_consent(
     consent_source: str,
     consent_phrase: str,
+    runtime_state: AgentRuntimeState | None = None,
 ) -> tuple[bool, str]:
-    """Return whether camera activation has explicit user consent."""
-    normalized_source = _normalize_text(consent_source).replace(" ", "_")
-    normalized_phrase = _normalize_text(consent_phrase)
-    if not normalized_phrase:
-        return False, "camera_consent_required"
-    if normalized_source == "explicit_request":
-        if _matches_any_phrase(normalized_phrase, _EXPLICIT_CAMERA_REQUEST_PHRASES):
-            return True, normalized_phrase
-        return False, "camera_consent_invalid"
-    if normalized_source == "explicit_confirmation":
-        if _matches_any_phrase(normalized_phrase, _EXPLICIT_CONFIRMATION_PHRASES):
-            return True, normalized_phrase
-        return False, "camera_consent_invalid"
-    return False, "camera_consent_required"
+    """Validate camera activation consent.
 
-
-def _matches_any_phrase(text: str, phrases: tuple[str, ...]) -> bool:
-    padded = f" {text} "
-    return any(f" {_normalize_text(phrase)} " in padded for phrase in phrases)
-
-
-def _normalize_text(value: str) -> str:
-    lowered = unicodedata.normalize("NFD", str(value or "").strip().lower())
-    without_marks = "".join(ch for ch in lowered if unicodedata.category(ch) != "Mn")
-    # đ (U+0111) không decompose trong NFD — map thủ công
-    without_marks = without_marks.replace("đ", "d").replace("Đ", "d")
-    cleaned = "".join(ch if ch.isalnum() else " " for ch in without_marks)
-    return " ".join(cleaned.split())
+    Delegates to intent_router.validate_camera_consent().
+    Kept as a public API for backward compatibility with tool_router.py.
+    """
+    from gemini_bridge.intent_router import validate_camera_consent
+    return validate_camera_consent(consent_source, consent_phrase, runtime_state)
