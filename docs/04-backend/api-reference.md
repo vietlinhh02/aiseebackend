@@ -65,6 +65,9 @@ Refresh JWT khi access token hết hạn.
 | Response 200 | `{ "data": { "access_token": "jwt", "refresh_token": "jwt" } }` |
 | Response 401 | `{ "error": { "code": "INVALID_REFRESH_TOKEN", "message": "..." } }` |
 
+Refresh token là session dài hạn 10 năm rolling. Mỗi lần refresh thành công sẽ rotate
+refresh token và vô hiệu hóa token cũ trong `auth_sessions`.
+
 ---
 
 ## Plans & Entitlements

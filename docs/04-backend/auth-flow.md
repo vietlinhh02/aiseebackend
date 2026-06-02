@@ -96,7 +96,7 @@ Backend tạo 2 tokens:
 | Token | Thoi han | Mục đích |
 |-------|----------|----------|
 | Access token | 1 gio | Xac thuc các API request |
-| Refresh token | 30 ngay | Lấy access token moi khi hết hạn |
+| Refresh token | 10 nam rolling | Lấy access token moi khi hết hạn |
 
 JWT payload:
 
@@ -151,8 +151,10 @@ Flutter app (Dio interceptor) tự động xử lý refresh:
 
 ### Refresh token rotation
 
-Moi lan refresh, backend phát hành CA HAI access token và refresh token mỗi. Refresh token cu bi vo hieu hoa. Dieu này giup:
-- Giam thời gian ton tại của refresh token bi lo
+Moi lan refresh, backend phát hành CA HAI access token và refresh token mới.
+Refresh token cũ bị vô hiệu hóa trong `auth_sessions`. Phiên được kéo dài
+thêm 10 năm từ lần refresh mới nhất. Điều này giúp:
+- Không phụ thuộc Google session trên thiết bị sau lần đăng nhập đầu
 - Phat hien token reuse (nếu refresh token cu được dùng lai, có thể la tan cong)
 
 ## Internal API Auth (Agent Worker -> Backend)

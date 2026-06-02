@@ -16,7 +16,7 @@ func newTestService() *Service {
 
 func TestGenerateTokenPair_ValidTokens(t *testing.T) {
 	s := newTestService()
-	pair, err := s.generateTokenPair("user-abc-123", "user")
+	pair, err := s.generateTokenPair(context.Background(), "user-abc-123", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestGenerateTokenPair_ValidTokens(t *testing.T) {
 
 func TestGenerateTokenPair_AccessTokenClaims(t *testing.T) {
 	s := newTestService()
-	pair, err := s.generateTokenPair("user-abc-123", "family")
+	pair, err := s.generateTokenPair(context.Background(), "user-abc-123", "family")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,11 +75,14 @@ func TestGenerateTokenPair_AccessTokenClaims(t *testing.T) {
 	if exp.After(time.Now().Add(2 * time.Hour)) {
 		t.Error("access token expiry is too far in the future")
 	}
+	if sid, _ := claims["sid"].(string); sid == "" {
+		t.Error("access token is missing session id")
+	}
 }
 
 func TestGenerateTokenPair_RefreshTokenClaims(t *testing.T) {
 	s := newTestService()
-	pair, err := s.generateTokenPair("user-abc-123", "user")
+	pair, err := s.generateTokenPair(context.Background(), "user-abc-123", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,19 +102,28 @@ func TestGenerateTokenPair_RefreshTokenClaims(t *testing.T) {
 	if typ != "refresh" {
 		t.Errorf("expected type 'refresh', got %q", typ)
 	}
+	if sid, _ := claims["sid"].(string); sid == "" {
+		t.Error("refresh token is missing session id")
+	}
+	if jti, _ := claims["jti"].(string); jti == "" {
+		t.Error("refresh token is missing refresh jti")
+	}
 
 	exp, err := claims.GetExpirationTime()
 	if err != nil {
 		t.Fatalf("missing exp claim: %v", err)
 	}
-	if exp.Before(time.Now().Add(29 * 24 * time.Hour)) {
+	if exp.Before(time.Now().Add(refreshTokenTTL - time.Minute)) {
 		t.Error("refresh token expiry is too short")
+	}
+	if exp.After(time.Now().Add(refreshTokenTTL + time.Minute)) {
+		t.Error("refresh token expiry is too far in the future")
 	}
 }
 
 func TestRefreshToken_ValidRefresh(t *testing.T) {
 	s := newTestService()
-	original, err := s.generateTokenPair("user-xyz", "user")
+	original, err := s.generateTokenPair(context.Background(), "user-xyz", "user")
 	if err != nil {
 		t.Fatalf("failed to generate initial tokens: %v", err)
 	}
@@ -147,7 +159,7 @@ func TestRefreshToken_ValidRefresh(t *testing.T) {
 
 func TestRefreshToken_RejectsAccessToken(t *testing.T) {
 	s := newTestService()
-	pair, err := s.generateTokenPair("user-xyz", "user")
+	pair, err := s.generateTokenPair(context.Background(), "user-xyz", "user")
 	if err != nil {
 		t.Fatalf("failed to generate tokens: %v", err)
 	}
@@ -188,7 +200,7 @@ func TestRefreshToken_RejectsWrongSecret(t *testing.T) {
 	wrongService := &Service{jwtSecret: "wrong-secret-at-least-32-chars!!"}
 
 	s := newTestService()
-	pair, err := s.generateTokenPair("user-xyz", "user")
+	pair, err := s.generateTokenPair(context.Background(), "user-xyz", "user")
 	if err != nil {
 		t.Fatalf("failed to generate tokens: %v", err)
 	}

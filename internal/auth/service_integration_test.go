@@ -62,7 +62,7 @@ func TestRefreshToken_Integration_WithDatabaseSuccess(t *testing.T) {
 	defer cleanTestUser(t, ctx, pool, userID)
 
 	// 2. Generate original tokens
-	original, err := s.generateTokenPair(userID, "user")
+	original, err := s.generateTokenPair(ctx, userID, "user")
 	if err != nil {
 		t.Fatalf("failed to generate token pair: %v", err)
 	}
@@ -86,6 +86,13 @@ func TestRefreshToken_Integration_WithDatabaseSuccess(t *testing.T) {
 	}
 	if gotRole, _ := claims["role"].(string); gotRole != "user" {
 		t.Errorf("expected role 'user', got %q", gotRole)
+	}
+	if sid, _ := claims["sid"].(string); sid == "" {
+		t.Error("expected refreshed access token to include session id")
+	}
+
+	if _, err = s.RefreshToken(ctx, original.RefreshToken); err == nil {
+		t.Fatal("expected original refresh token to be rejected after rotation")
 	}
 
 	// 4. Update role in database to 'family'
@@ -123,7 +130,7 @@ func TestRefreshToken_Integration_UserMissing(t *testing.T) {
 	defer cleanTestUser(t, ctx, pool, userID)
 
 	// 2. Generate original tokens
-	original, err := s.generateTokenPair(userID, "user")
+	original, err := s.generateTokenPair(ctx, userID, "user")
 	if err != nil {
 		t.Fatalf("failed to generate token pair: %v", err)
 	}

@@ -54,10 +54,10 @@ User                Flutter App           Google OAuth2          Go Backend
 
 - **Access token:** Thời hạn ngắn (vd: 1 giờ). Đính kèm vào mỗi HTTP request
   trong header `Authorization: Bearer <token>`
-- **Refresh token:** Thời hạn dài (vd: 30 ngày). Dùng để lấy access token mới
-  khi hết hạn. Lưu an toàn trên device
-- **Token revoke:** Khi Google OAuth token bị thu hồi (user xóa quyền), refresh
-  fail --> app hiện màn hình đăng nhập lại
+- **Refresh token:** Phiên dài hạn 10 năm rolling, gắn với `auth_sessions`.
+  Dùng để lấy access token mới khi hết hạn. Lưu an toàn trên device
+- **Token revoke:** Khi session bị revoke hoặc hết hạn, refresh fail --> app
+  hiện màn hình đăng nhập lại
 
 ### Bảo vệ token trên device
 
@@ -254,7 +254,7 @@ Thay thế:
 | Lịch sử thuốc, triệu chứng, chỉ số sức khỏe | PostgreSQL | Chỉ user và family link xem được | Append-only |
 | Audit log (tool call) | PostgreSQL | Chỉ user và family link xem được | Append-only |
 | Vị trí GPS | Chỉ gửi khi emergency alert | Không lưu trữ lâu dài | Gửi trong push, không lưu DB |
-| JWT token | Device (Keychain/EncryptedSharedPrefs) | Mã hóa | Refresh: 30 ngày |
+| JWT token | Device (Keychain/EncryptedSharedPrefs) | Mã hóa | Refresh: 10 năm rolling |
 | Session context | Redis | Không mã hóa | TTL tự động xóa |
 
 ### Dữ liệu gửi đến Google/Gemini

@@ -7,9 +7,16 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/team-dang/aiseebackend/internal/dbgen"
+)
+
+const (
+	accessTokenTTL          = time.Hour
+	refreshTokenTTL         = 10 * 365 * 24 * time.Hour
+	accessTokenExpiresInSec = int64(accessTokenTTL / time.Second)
 )
 
 type Service struct {
@@ -36,7 +43,26 @@ type TokenPair struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-func (s *Service) AuthenticateGoogle(ctx context.Context, idToken, role string) (*TokenPair, error) {
+type tokenIssue struct {
+	UserID           string
+	Role             string
+	SessionID        string
+	RefreshJti       string
+	RefreshExpiresAt time.Time
+}
+
+type refreshSessionRotation struct {
+	UserID             string
+	SessionID          string
+	PreviousRefreshJti string
+	RefreshJti         string
+	ExpiresAt          time.Time
+}
+
+func (s *Service) AuthenticateGoogle(
+	ctx context.Context,
+	idToken, role string,
+) (*TokenPair, error) {
 	info, err := VerifyGoogleToken(ctx, idToken)
 	if err != nil {
 		return nil, err
@@ -68,7 +94,7 @@ func (s *Service) AuthenticateGoogle(ctx context.Context, idToken, role string) 
 
 	s.cacheUserStatus(ctx, user.ID.String(), effectiveRole)
 
-	return s.generateTokenPair(user.ID.String(), effectiveRole)
+	return s.generateTokenPair(ctx, user.ID.String(), effectiveRole)
 }
 
 func (s *Service) resolveEffectiveRole(ctx context.Context, userID, baseRole string) string {
@@ -103,23 +129,13 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 		return nil, fmt.Errorf("not a refresh token")
 	}
 
-	// Atomically check and invalidate the old refresh token (rotation)
-	jti, _ := claims["jti"].(string)
-	if exp, ok := claims["exp"].(float64); ok {
-		ttl := time.Until(time.Unix(int64(exp), 0))
-		if ttl > 0 && s.rdb != nil {
-			ok, err := s.rdb.SetNX(ctx, "revoked:"+jti, "1", ttl).Result()
-			if err != nil {
-				return nil, fmt.Errorf("redis error: %w", err)
-			}
-			if !ok {
-				return nil, fmt.Errorf("token revoked")
-			}
-		}
-	}
-
 	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		return nil, fmt.Errorf("invalid claims")
+	}
 	role, _ := claims["role"].(string)
+	sessionID, _ := claims["sid"].(string)
+	previousRefreshJti, _ := claims["jti"].(string)
 	var dbErr error
 	role, dbErr = s.currentBaseRole(ctx, sub, role)
 	if dbErr != nil {
@@ -127,7 +143,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	}
 	effectiveRole := s.resolveEffectiveRole(ctx, sub, role)
 
-	return s.generateTokenPair(sub, effectiveRole)
+	return s.rotateTokenPair(ctx, sub, effectiveRole, sessionID, previousRefreshJti)
 }
 
 func (s *Service) currentBaseRole(ctx context.Context, userID, fallback string) (string, error) {
@@ -135,7 +151,12 @@ func (s *Service) currentBaseRole(ctx context.Context, userID, fallback string) 
 		return fallback, nil
 	}
 	var role string
-	if err := s.db.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&role); err != nil {
+	err := s.db.QueryRow(
+		ctx,
+		`SELECT role FROM users WHERE id = $1`,
+		userID,
+	).Scan(&role)
+	if err != nil {
 		return "", err
 	}
 	return role, nil
@@ -146,18 +167,120 @@ func (s *Service) cacheUserStatus(ctx context.Context, userID, role string) {
 		return
 	}
 
-	// Cache for 1 hour, matches access token duration
-	s.rdb.Set(ctx, "user:status:"+userID, role, time.Hour)
+	s.rdb.Set(ctx, "user:status:"+userID, role, accessTokenTTL)
 }
 
-func (s *Service) generateTokenPair(userID, role string) (*TokenPair, error) {
-	jti := uuid.New().String()
-	accessExp := time.Now().Add(time.Hour)
+func (s *Service) generateTokenPair(
+	ctx context.Context,
+	userID, role string,
+) (*TokenPair, error) {
+	issue := tokenIssue{
+		UserID:           userID,
+		Role:             role,
+		SessionID:        uuid.NewString(),
+		RefreshJti:       uuid.NewString(),
+		RefreshExpiresAt: time.Now().Add(refreshTokenTTL),
+	}
+	if err := s.createRefreshSession(ctx, issue); err != nil {
+		return nil, err
+	}
+	return s.signTokenPair(issue)
+}
+
+func (s *Service) rotateTokenPair(
+	ctx context.Context,
+	userID, role, sessionID, previousRefreshJti string,
+) (*TokenPair, error) {
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	issue := tokenIssue{
+		UserID:           userID,
+		Role:             role,
+		SessionID:        sessionID,
+		RefreshJti:       uuid.NewString(),
+		RefreshExpiresAt: time.Now().Add(refreshTokenTTL),
+	}
+	rotation := refreshSessionRotation{
+		UserID:             userID,
+		SessionID:          sessionID,
+		PreviousRefreshJti: previousRefreshJti,
+		RefreshJti:         issue.RefreshJti,
+		ExpiresAt:          issue.RefreshExpiresAt,
+	}
+	if err := s.rotateRefreshSession(ctx, rotation); err != nil {
+		return nil, err
+	}
+	return s.signTokenPair(issue)
+}
+
+func (s *Service) createRefreshSession(
+	ctx context.Context,
+	issue tokenIssue,
+) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO auth_sessions (id, user_id, refresh_jti, expires_at)
+		VALUES ($1::uuid, $2::uuid, $3, $4)
+	`, issue.SessionID, issue.UserID, issue.RefreshJti, issue.RefreshExpiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to create auth session: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) rotateRefreshSession(
+	ctx context.Context,
+	rotation refreshSessionRotation,
+) error {
+	if s.db == nil {
+		return nil
+	}
+	if rotation.SessionID == "" || rotation.PreviousRefreshJti == "" {
+		return fmt.Errorf("invalid refresh session")
+	}
+	var sessionID string
+	err := s.db.QueryRow(ctx, `
+		UPDATE auth_sessions
+		SET refresh_jti = $4,
+		    rotated_at = now(),
+		    last_used_at = now(),
+		    expires_at = $5
+		WHERE id = $1::uuid
+		  AND user_id = $2::uuid
+		  AND refresh_jti = $3
+		  AND revoked_at IS NULL
+		  AND expires_at > now()
+		RETURNING id::text
+	`,
+		rotation.SessionID,
+		rotation.UserID,
+		rotation.PreviousRefreshJti,
+		rotation.RefreshJti,
+		rotation.ExpiresAt,
+	).Scan(&sessionID)
+	if err == nil {
+		return nil
+	}
+	if err == pgx.ErrNoRows {
+		return fmt.Errorf("invalid refresh session")
+	}
+	return fmt.Errorf("failed to rotate auth session: %w", err)
+}
+
+func (s *Service) signTokenPair(issue tokenIssue) (*TokenPair, error) {
+	issuedAt := time.Now()
+	accessJti := uuid.NewString()
+	accessExp := issuedAt.Add(accessTokenTTL)
 	access := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":  userID,
-		"role": role,
+		"sub":  issue.UserID,
+		"role": issue.Role,
 		"type": "access",
-		"jti":  jti,
+		"sid":  issue.SessionID,
+		"jti":  accessJti,
+		"iat":  issuedAt.Unix(),
 		"exp":  accessExp.Unix(),
 	})
 	accessStr, err := access.SignedString([]byte(s.jwtSecret))
@@ -165,13 +288,14 @@ func (s *Service) generateTokenPair(userID, role string) (*TokenPair, error) {
 		return nil, err
 	}
 
-	refreshJti := uuid.New().String()
 	refresh := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":  userID,
-		"role": role,
+		"sub":  issue.UserID,
+		"role": issue.Role,
 		"type": "refresh",
-		"jti":  refreshJti,
-		"exp":  time.Now().Add(30 * 24 * time.Hour).Unix(),
+		"sid":  issue.SessionID,
+		"jti":  issue.RefreshJti,
+		"iat":  issuedAt.Unix(),
+		"exp":  issue.RefreshExpiresAt.Unix(),
 	})
 	refreshStr, err := refresh.SignedString([]byte(s.jwtSecret))
 	if err != nil {
@@ -181,6 +305,6 @@ func (s *Service) generateTokenPair(userID, role string) (*TokenPair, error) {
 	return &TokenPair{
 		AccessToken:  accessStr,
 		RefreshToken: refreshStr,
-		ExpiresIn:    3600,
+		ExpiresIn:    accessTokenExpiresInSec,
 	}, nil
 }
