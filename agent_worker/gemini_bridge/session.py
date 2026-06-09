@@ -208,11 +208,12 @@ class GoogleSDKBridge:
                 for task in pending:
                     with suppress(asyncio.CancelledError):
                         await task
-                for task in done:
-                    if task is receive_task:
-                        task.result()
-                    elif task is wake_task:
-                        task.result()
+                # Don't re-raise from receive_task — normal disconnects/cancels
+                # are not failures.  Only log unexpected errors.
+                if receive_task.done() and not receive_task.cancelled():
+                    exc = receive_task.exception()
+                    if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                        self.logger.warning("receive_loop error: %s", exc)
         except Exception:
             await publish_agent_state(local, AgentState.ERROR, self.logger)
             if user_context.get("user_id"):

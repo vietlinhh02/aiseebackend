@@ -12,7 +12,7 @@ from typing import Any, AsyncContextManager, AsyncIterator, Callable, Protocol
 
 from google.genai import errors as genai_errors
 from websockets.asyncio.server import serve
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from config import AI_COST_PRICING_VERSION
 
@@ -567,14 +567,18 @@ class GeminiBridgeWebSocketService:
                     enable_google_search=False,
                 )
         except Exception as exc:
-            session_failed = True
-            code = _session_error_code(exc)
-            self.log.warning("assistant session failed code=%s error=%s", code, exc)
-            await _emit_tracking(backend, "ai_session_failed")
-            with suppress(Exception):
-                await transport.emit_state(AgentState.ERROR)
-            with suppress(Exception):
-                await transport.emit_error(code, _session_error_message(exc))
+            if _is_normal_disconnect(exc):
+                self.log.info("assistant session disconnected normally")
+                await _emit_tracking(backend, "ai_session_ended")
+            else:
+                session_failed = True
+                code = _session_error_code(exc)
+                self.log.warning("assistant session failed code=%s error=%s", code, exc)
+                await _emit_tracking(backend, "ai_session_failed")
+                with suppress(Exception):
+                    await transport.emit_state(AgentState.ERROR)
+                with suppress(Exception):
+                    await transport.emit_error(code, _session_error_message(exc))
         else:
             await _emit_tracking(backend, "ai_session_ended")
         finally:
@@ -741,3 +745,20 @@ def _load_nsfw_filter_for_service(log: logging.Logger) -> NsfwFilter | None:
 def _is_quota_error(exc: Exception) -> bool:
     message = _session_error_text(exc).lower()
     return "quota" in message or "rate limit" in message or "resource exhausted" in message
+
+
+def _is_normal_disconnect(exc: Exception) -> bool:
+    """Check if exception represents a normal client/server disconnect."""
+    if isinstance(exc, ConnectionClosed):
+        return True
+    if isinstance(exc, WebSocketException):
+        return True
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    if isinstance(exc, genai_errors.APIError):
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 1000:
+            return True
+        if str(exc).strip().startswith("1000"):
+            return True
+    return False
