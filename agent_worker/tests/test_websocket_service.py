@@ -456,3 +456,95 @@ async def test_websocket_service_reports_gemini_quota_connect_error():
     } in sent_json
     assert sent_json[-1] == {"type": "agent_state", "state": "disconnected"}
     assert websocket.closed is True
+
+
+# ── serve() resource caps ─────────────────────────────────────────────
+
+
+class _CountingConnection:
+    """Stand-in for ``websockets.asyncio.server.ServerConnection``."""
+
+    def __init__(self) -> None:
+        self.responded: tuple[int, str] | None = None
+
+    def respond(self, status: int, text: str):
+        self.responded = (status, text)
+        return SimpleNamespace(status_code=status, body=text.encode("utf-8"))
+
+
+@pytest.mark.anyio
+async def test_process_request_rejects_when_at_capacity(monkeypatch):
+    """process_request returns 503 once _active_ws_handlers >= max_clients."""
+    import gemini_bridge.websocket_service as ws_module
+
+    monkeypatch.setattr(ws_module, "_active_ws_handlers", 5)
+    process_request = ws_module._build_process_request(max_clients=5)
+
+    conn = _CountingConnection()
+    result = await process_request(conn, request=None)
+
+    assert result is not None
+    assert conn.responded == (503, "Server at capacity, please retry")
+
+
+@pytest.mark.anyio
+async def test_process_request_allows_when_under_capacity(monkeypatch):
+    """process_request returns None when below the cap so the handshake proceeds."""
+    import gemini_bridge.websocket_service as ws_module
+
+    monkeypatch.setattr(ws_module, "_active_ws_handlers", 3)
+    process_request = ws_module._build_process_request(max_clients=5)
+
+    conn = _CountingConnection()
+    result = await process_request(conn, request=None)
+
+    assert result is None
+    assert conn.responded is None
+
+
+@pytest.mark.anyio
+async def test_handle_with_count_increments_and_decrements(monkeypatch):
+    """_handle_with_count tracks the global counter via try/finally."""
+    import gemini_bridge.websocket_service as ws_module
+
+    monkeypatch.setattr(ws_module, "_active_ws_handlers", 0)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class _DummyService:
+        async def handle(self, websocket):  # noqa: ARG002
+            entered.set()
+            await release.wait()
+
+    service = _DummyService()
+    task = asyncio.create_task(
+        ws_module.GeminiBridgeWebSocketService._handle_with_count(
+            service, websocket=object()
+        )
+    )
+
+    await entered.wait()
+    assert ws_module._active_ws_handlers == 1
+
+    release.set()
+    await task
+    assert ws_module._active_ws_handlers == 0
+
+
+@pytest.mark.anyio
+async def test_handle_with_count_decrements_on_exception(monkeypatch):
+    """Counter must be decremented even if handle() raises."""
+    import gemini_bridge.websocket_service as ws_module
+
+    monkeypatch.setattr(ws_module, "_active_ws_handlers", 0)
+
+    class _BoomService:
+        async def handle(self, websocket):  # noqa: ARG002
+            raise RuntimeError("simulated failure")
+
+    service = _BoomService()
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        await ws_module.GeminiBridgeWebSocketService._handle_with_count(
+            service, websocket=object()
+        )
+    assert ws_module._active_ws_handlers == 0

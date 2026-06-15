@@ -43,6 +43,13 @@ from .transport import (
 
 logger = logging.getLogger("aisee-agent")
 MAX_WEBSOCKET_MESSAGE_BYTES = 8 * 1024 * 1024
+DEFAULT_WS_MAX_CLIENTS = 100
+
+# Module-level counter of handlers currently running.
+# asyncio is single-threaded and cooperative, so a plain int is safe to
+# mutate at await points without a lock — there is no preemption between
+# the increment and the await.
+_active_ws_handlers: int = 0
 
 
 class WebSocketConnection(Protocol):
@@ -617,13 +624,58 @@ class GeminiBridgeWebSocketService:
             await transport.close()
 
     async def serve(self, host: str, port: int, **kwargs):
-        # Cap resources per process. Without these, a connection storm
-        # or many dead idle connections can OOM/CPU-pile the VPS.
+        """Start the WebSocket server with resource caps.
+
+        The ``websockets`` library does not support a ``max_clients`` kwarg
+        (it's not part of ``serve()`` or ``loop.create_server()``), so we
+        enforce the cap ourselves in two parts:
+
+        1. A ``process_request`` callback inspects the active handler count
+           and returns ``503 Service Unavailable`` if the server is at
+           capacity. This runs during the HTTP→WS handshake.
+        2. The handler is wrapped in :meth:`_handle_with_count` so the
+           counter is incremented once the connection is actually
+           established and decremented on disconnect (try/finally).
+
+        Together this stops a connection storm from OOM-ing the VPS while
+        staying within the public ``websockets`` API.
+        """
+        max_clients = int(os.environ.get("WS_MAX_CLIENTS", str(DEFAULT_WS_MAX_CLIENTS)))
         kwargs.setdefault("max_size", MAX_WEBSOCKET_MESSAGE_BYTES)
-        kwargs.setdefault("max_clients", int(os.environ.get("WS_MAX_CLIENTS", "100")))
         kwargs.setdefault("ping_interval", 20)
         kwargs.setdefault("ping_timeout", 20)
-        return await serve(self.handle, host, port, **kwargs)
+        kwargs.setdefault("process_request", _build_process_request(max_clients))
+        return await serve(self._handle_with_count, host, port, **kwargs)
+
+    async def _handle_with_count(self, websocket) -> None:
+        """Wrap :meth:`handle` to keep a process-wide active-connection count."""
+        global _active_ws_handlers
+        _active_ws_handlers += 1
+        try:
+            await self.handle(websocket)
+        finally:
+            _active_ws_handlers -= 1
+
+
+def _build_process_request(max_clients: int):
+    """Return a ``process_request`` callback that 503s when at capacity.
+
+    The returned coroutine is invoked by ``websockets.serve`` for every
+    incoming HTTP upgrade request, before the WebSocket handshake is
+    completed.
+    """
+
+    async def process_request(connection, request):  # noqa: ARG001
+        if _active_ws_handlers >= max_clients:
+            logger.warning(
+                "ws server at capacity active=%d max=%d, rejecting new connection",
+                _active_ws_handlers,
+                max_clients,
+            )
+            return connection.respond(503, "Server at capacity, please retry")
+        return None
+
+    return process_request
 
     async def _run_gemini_session(
         self,
