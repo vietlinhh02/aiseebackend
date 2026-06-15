@@ -34,6 +34,13 @@ type careService interface {
 		userID string,
 		endDate time.Time,
 	) (WeeklyReportResponse, error)
+	NavigationHistory(
+		ctx context.Context,
+		requesterID string,
+		userID string,
+		days int,
+		limit int,
+	) (NavigationHistoryResponse, error)
 	IncidentReport(
 		ctx context.Context,
 		requesterID string,
@@ -149,6 +156,26 @@ func (h *Handler) IncidentReport(
 	resp, err := h.svc.IncidentReport(r.Context(), requesterID, userID)
 	if err != nil {
 		h.writeError(w, err, "incident_report_failed")
+		return
+	}
+	response.JSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) NavigationHistory(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	requesterID, userID, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+
+	days := parseIntQuery(r, "days", 30)
+	limit := parseIntQuery(r, "limit", 50)
+
+	resp, err := h.svc.NavigationHistory(r.Context(), requesterID, userID, days, limit)
+	if err != nil {
+		h.writeError(w, err, "navigation_history_failed")
 		return
 	}
 	response.JSON(w, http.StatusOK, resp)

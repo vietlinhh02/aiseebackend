@@ -84,6 +84,16 @@ func (f *fakeHandlerService) ExportPDF(
 	return f.exportResp, f.exportErr
 }
 
+func (f *fakeHandlerService) NavigationHistory(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ int,
+	_ int,
+) (NavigationHistoryResponse, error) {
+	return NavigationHistoryResponse{Trips: []NavigationTrip{}, WindowDays: 30}, nil
+}
+
 func TestHandlerTimelineReturnsForbiddenWithoutFamilyAccess(t *testing.T) {
 	h := NewHandler(&fakeHandlerService{}, &fakeFamilyChecker{}, nil)
 	req := withCareRouteContext(

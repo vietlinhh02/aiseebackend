@@ -321,6 +321,7 @@ func main() {
 					r.Get("/timeline", careHandler.Timeline)
 					r.Get("/daily-brief", careHandler.DailyBrief)
 					r.Get("/weekly-report", careHandler.WeeklyReport)
+					r.Get("/navigation-history", careHandler.NavigationHistory)
 					r.Get("/incident-report", careHandler.IncidentReport)
 					r.Post("/export/pdf", careHandler.ExportPDF)
 				})

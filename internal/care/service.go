@@ -78,6 +78,7 @@ type WindowData struct {
 	Audits         []AuditEntry
 	Calls          []CallUsageEntry
 	CareEvents     []CareEventRow
+	NavigationTrips []NavigationTrip
 }
 
 type MedicationInfo struct {
@@ -157,12 +158,43 @@ type ReportTotals struct {
 	VideoCallCount     int     `json:"video_call_count"`
 	VideoCallMinutes   float64 `json:"video_call_minutes"`
 	VoiceCallMinutes   float64 `json:"voice_call_minutes"`
+	NavigationTrips    int     `json:"navigation_trips"`
+	NavigationTripsCompleted int `json:"navigation_trips_completed"`
+	NavigationTripsDeviated  int `json:"navigation_trips_deviated"`
+	NavigationDistanceM      float64 `json:"navigation_distance_m"`
 }
 
 type DailyBriefResponse struct {
 	Date    string       `json:"date"`
 	Summary []string     `json:"summary"`
 	Totals  ReportTotals `json:"totals"`
+}
+
+// NavigationTrip = 1 cuốc đi bộ trong app (Mapbox walking route)
+type NavigationTrip struct {
+	ID                     string    `json:"id"`
+	DestinationQuery       string    `json:"destination_query"`
+	DestinationName        string    `json:"destination_name,omitempty"`
+	OriginLat              float64   `json:"origin_lat"`
+	OriginLng              float64   `json:"origin_lng"`
+	DestinationLat         float64   `json:"destination_lat,omitempty"`
+	DestinationLng         float64   `json:"destination_lng,omitempty"`
+	TotalDistanceM         float64   `json:"total_distance_m"`
+	TotalDurationEstimatedS float64  `json:"total_duration_estimated_s"`
+	ActualDurationS        int       `json:"actual_duration_s"`
+	TotalSteps             int       `json:"total_steps"`
+	StepsCompleted         int       `json:"steps_completed"`
+	DeviationCount         int       `json:"deviation_count"`
+	Outcome                string    `json:"outcome"` // completed | cancelled | deviated | error | in_progress
+	Mode                   string    `json:"mode"`
+	StartedAt              time.Time `json:"started_at"`
+	EndedAt                time.Time `json:"ended_at,omitempty"`
+}
+
+type NavigationHistoryResponse struct {
+	Trips   []NavigationTrip `json:"trips"`
+	Total   int              `json:"total"`
+	WindowDays int           `json:"window_days"`
 }
 
 type WeeklyReportResponse struct {
@@ -397,6 +429,50 @@ func (s *Service) IncidentReport(
 		),
 	}
 	return resp, nil
+}
+
+func (s *Service) NavigationHistory(
+	ctx context.Context,
+	requesterID string,
+	userID string,
+	days int,
+	limit int,
+) (NavigationHistoryResponse, error) {
+	if days <= 0 || days > 90 {
+		days = 30
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	if err := s.requireBoolEntitlement(
+		ctx, requesterID, userID, "navigation_history_enabled",
+		"Navigation history is not available on this plan",
+	); err != nil {
+		return NavigationHistoryResponse{}, err
+	}
+
+	now := s.now()
+	end := now.Add(24 * time.Hour) // inclusive of today
+	start := end.AddDate(0, 0, -days)
+
+	data, err := s.store.LoadWindow(ctx, userID, start, end)
+	if err != nil {
+		return NavigationHistoryResponse{}, fmt.Errorf("load navigation history: %w", err)
+	}
+
+	trips := data.NavigationTrips
+	if trips == nil {
+		trips = []NavigationTrip{}
+	}
+	if len(trips) > limit {
+		trips = trips[:limit]
+	}
+	return NavigationHistoryResponse{
+		Trips:      trips,
+		Total:      len(data.NavigationTrips),
+		WindowDays: days,
+	}, nil
 }
 
 func (s *Service) ExportPDF(
@@ -856,6 +932,17 @@ func summarizeWindow(data WindowData) (ReportTotals, []string) {
 		}
 	}
 
+	for _, trip := range data.NavigationTrips {
+		totals.NavigationTrips++
+		switch trip.Outcome {
+		case "completed":
+			totals.NavigationTripsCompleted++
+		case "deviated":
+			totals.NavigationTripsDeviated++
+		}
+		totals.NavigationDistanceM += trip.TotalDistanceM
+	}
+
 	summary := []string{
 		fmt.Sprintf(
 			"Medication logs: %d taken, %d skipped across %d active medications.",
@@ -867,8 +954,23 @@ func summarizeWindow(data WindowData) (ReportTotals, []string) {
 		metricSummary(data.Metrics),
 		callSummary(totals),
 		incidentSummary(totals),
+		navigationSummary(totals),
 	}
 	return totals, summary
+}
+
+func navigationSummary(totals ReportTotals) string {
+	if totals.NavigationTrips == 0 {
+		return "No walking trips recorded this period."
+	}
+	km := totals.NavigationDistanceM / 1000.0
+	return fmt.Sprintf(
+		"Walking trips: %d (%d completed, %d deviated) over %.1f km.",
+		totals.NavigationTrips,
+		totals.NavigationTripsCompleted,
+		totals.NavigationTripsDeviated,
+		km,
+	)
 }
 
 type emergencyAlert struct {

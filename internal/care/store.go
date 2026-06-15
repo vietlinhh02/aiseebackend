@@ -51,6 +51,10 @@ func (s *PGStore) LoadWindow(
 	if err != nil {
 		return WindowData{}, err
 	}
+	navTrips, err := s.loadNavigationTrips(ctx, userID, start, end)
+	if err != nil {
+		return WindowData{}, err
+	}
 	return WindowData{
 		Medications:    medications,
 		MedicationLogs: logs,
@@ -59,6 +63,7 @@ func (s *PGStore) LoadWindow(
 		Audits:         audits,
 		Calls:          calls,
 		CareEvents:     careEv,
+		NavigationTrips: navTrips,
 	}, nil
 }
 
@@ -275,6 +280,64 @@ func (s *PGStore) loadCalls(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate call usage: %w", err)
+	}
+	return items, nil
+}
+
+// ── Navigation trips (in-app walking navigation history) ──
+
+func (s *PGStore) loadNavigationTrips(
+	ctx context.Context,
+	userID string,
+	start time.Time,
+	end time.Time,
+) ([]NavigationTrip, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id::text,
+			destination_query,
+			COALESCE(destination_name, ''),
+			origin_lat, origin_lng,
+			COALESCE(destination_lat, 0), COALESCE(destination_lng, 0),
+			total_distance_m, total_duration_estimated_s,
+			actual_duration_s, total_steps, steps_completed,
+			deviation_count, outcome, mode,
+			started_at, ended_at
+		FROM navigation_history
+		WHERE user_id = $1::uuid
+			AND started_at >= $2
+			AND started_at < $3
+		ORDER BY started_at DESC
+	`, userID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("query navigation_history: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]NavigationTrip, 0)
+	for rows.Next() {
+		var item NavigationTrip
+		var endedAt *time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.DestinationQuery,
+			&item.DestinationName,
+			&item.OriginLat, &item.OriginLng,
+			&item.DestinationLat, &item.DestinationLng,
+			&item.TotalDistanceM, &item.TotalDurationEstimatedS,
+			&item.ActualDurationS, &item.TotalSteps, &item.StepsCompleted,
+			&item.DeviationCount, &item.Outcome, &item.Mode,
+			&item.StartedAt, &endedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan navigation_history: %w", err)
+		}
+		if endedAt != nil {
+			item.EndedAt = *endedAt
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate navigation_history: %w", err)
 	}
 	return items, nil
 }

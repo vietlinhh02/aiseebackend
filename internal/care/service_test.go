@@ -361,7 +361,7 @@ func TestServiceWeeklyReportBuildsDeterministicSummary(t *testing.T) {
 	if resp.Totals.TakenMedications != 1 || resp.Totals.SkippedMedications != 1 {
 		t.Fatalf("unexpected medication totals: %+v", resp.Totals)
 	}
-	if len(resp.Summary) != 5 {
+	if len(resp.Summary) != 6 {
 		t.Fatalf("summary len = %d", len(resp.Summary))
 	}
 	if resp.Summary[0] != "Medication logs: 1 taken, 1 skipped across 1 active medications." {
