@@ -1627,3 +1627,59 @@ func decodeJSONMap(data []byte) map[string]any {
 	}
 	return value
 }
+
+// WriteNavigationTrip ghi 1 cuốc navigation vào bảng navigation_history.
+// Idempotent qua (user_id, source_id) — nếu đã có thì UPDATE.
+func (s *PgxStore) WriteNavigationTrip(
+	ctx context.Context,
+	trip NavigationTripRow,
+) error {
+	mode := trip.Mode
+	if mode == "" {
+		mode = "in_app_walking"
+	}
+	outcome := trip.Outcome
+	if outcome == "" {
+		outcome = "in_progress"
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO navigation_history (
+			user_id, destination_query, destination_name,
+			origin_lat, origin_lng,
+			destination_lat, destination_lng,
+			total_distance_m, total_duration_estimated_s,
+			actual_duration_s, total_steps, steps_completed,
+			deviation_count, outcome, mode,
+			started_at, ended_at
+		) VALUES (
+			$1::uuid, $2, $3,
+			$4, $5,
+			$6, $7,
+			$8, $9,
+			$10, $11, $12,
+			$13, $14, $15,
+			COALESCE(NULLIF($16, '0001-01-01 00:00:00+00:00'::timestamptz), now()),
+			NULLIF($17, '0001-01-01 00:00:00+00:00'::timestamptz)
+		)
+		ON CONFLICT (user_id, started_at) DO UPDATE SET
+			destination_query = EXCLUDED.destination_query,
+			destination_name = EXCLUDED.destination_name,
+			actual_duration_s = EXCLUDED.actual_duration_s,
+			steps_completed = EXCLUDED.steps_completed,
+			deviation_count = EXCLUDED.deviation_count,
+			outcome = EXCLUDED.outcome,
+			ended_at = EXCLUDED.ended_at
+	`,
+		trip.UserID, trip.DestinationQuery, trip.DestinationName,
+		trip.OriginLat, trip.OriginLng,
+		trip.DestinationLat, trip.DestinationLng,
+		trip.TotalDistanceM, trip.TotalDurationEstimatedS,
+		trip.ActualDurationS, trip.TotalSteps, trip.StepsCompleted,
+		trip.DeviationCount, outcome, mode,
+		trip.StartedAt, trip.EndedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("write navigation_history: %w", err)
+	}
+	return nil
+}

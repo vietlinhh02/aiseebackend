@@ -229,7 +229,59 @@ func (s *Service) RecordBillableUsage(
 		return UsageRecord{}, err
 	}
 	input.Quantity = roundQuantity(input.Quantity)
-	return s.store.RecordUsage(ctx, input)
+	record, err := s.store.RecordUsage(ctx, input)
+	if err != nil {
+		return UsageRecord{}, err
+	}
+	// Side effect: nếu là cuốc navigation → mirror sang navigation_history
+	// để weekly report + family dashboard đọc được chi tiết
+	if input.UsageType == "navigation_trips" {
+		s.recordNavigationTrip(ctx, input)
+	}
+	return record, nil
+}
+
+// recordNavigationTrip ghi 1 row vào navigation_history từ metadata của usage_ledger
+// (best-effort — lỗi không chặn response của client)
+func (s *Service) recordNavigationTrip(
+	ctx context.Context,
+	input UsageRecordInput,
+) {
+	navStore, ok := s.store.(NavigationHistoryWriter)
+	if !ok {
+		return
+	}
+	startedAt := time.Time{}
+	if input.StartedAt != nil {
+		startedAt = *input.StartedAt
+	}
+	endedAt := time.Time{}
+	if input.EndedAt != nil {
+		endedAt = *input.EndedAt
+	}
+	trip := NavigationTripRow{
+		UserID:                   input.UserID,
+		DestinationQuery:         stringFromMeta(input.Metadata, "destination_query"),
+		DestinationName:          stringFromMeta(input.Metadata, "destination_name"),
+		OriginLat:                floatFromMeta(input.Metadata, "origin_lat"),
+		OriginLng:                floatFromMeta(input.Metadata, "origin_lng"),
+		DestinationLat:           floatFromMeta(input.Metadata, "destination_lat"),
+		DestinationLng:           floatFromMeta(input.Metadata, "destination_lng"),
+		TotalDistanceM:           floatFromMeta(input.Metadata, "total_distance_m"),
+		TotalDurationEstimatedS:  floatFromMeta(input.Metadata, "total_duration_estimated_s"),
+		ActualDurationS:          int(floatFromMeta(input.Metadata, "actual_duration_s")),
+		TotalSteps:               int(floatFromMeta(input.Metadata, "total_steps")),
+		StepsCompleted:           int(floatFromMeta(input.Metadata, "steps_completed")),
+		DeviationCount:           int(floatFromMeta(input.Metadata, "deviation_count")),
+		Outcome:                  stringFromMeta(input.Metadata, "outcome"),
+		Mode:                     stringFromMeta(input.Metadata, "mode"),
+		StartedAt:                startedAt,
+		EndedAt:                  endedAt,
+	}
+	if err := navStore.WriteNavigationTrip(ctx, trip); err != nil {
+		// best-effort: log but don't propagate
+		fmt.Printf("warning: failed to write navigation_history row: %v\n", err)
+	}
 }
 
 func (s *Service) RecordAICostEvent(
@@ -1191,4 +1243,56 @@ func usageTypeRequiresConfiguredPlanQuota(ut UsageType) bool {
 	default:
 		return false
 	}
+}
+
+// ── Navigation history side-effect ──
+
+// NavigationTripRow = 1 cuốc đi bộ sẽ ghi vào navigation_history
+type NavigationTripRow struct {
+	UserID                  string
+	DestinationQuery        string
+	DestinationName         string
+	OriginLat               float64
+	OriginLng               float64
+	DestinationLat          float64
+	DestinationLng          float64
+	TotalDistanceM          float64
+	TotalDurationEstimatedS float64
+	ActualDurationS         int
+	TotalSteps              int
+	StepsCompleted          int
+	DeviationCount          int
+	Outcome                 string
+	Mode                    string
+	StartedAt               time.Time
+	EndedAt                 time.Time
+}
+
+// NavigationHistoryWriter: bất kỳ store nào implement interface này sẽ nhận
+// navigation trip events. Mặc định PgxStore sẽ implement nó.
+type NavigationHistoryWriter interface {
+	WriteNavigationTrip(ctx context.Context, trip NavigationTripRow) error
+}
+
+func stringFromMeta(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func floatFromMeta(m map[string]any, key string) float64 {
+	if v, ok := m[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return n
+		case int:
+			return float64(n)
+		case int64:
+			return float64(n)
+		}
+	}
+	return 0
 }
