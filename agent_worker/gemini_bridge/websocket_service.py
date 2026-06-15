@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -522,6 +523,15 @@ class GeminiBridgeWebSocketService:
         async def _emit_tracking(backend_client, event_type: str) -> None:
             if not user_id:
                 return
+            # Fire-and-forget via create_task so tracking HTTP doesn't block
+            # the session lifecycle. Failures are silent (observability only).
+            asyncio.create_task(
+                _send_tracking_event(
+                    backend_client, event_type, user_id, source_id, self.settings.model
+                )
+            )
+
+        async def _send_tracking_event(backend_client, event_type, user_id, source_id, model):
             try:
                 await backend_client.record_tracking_event(
                     event_type=event_type,
@@ -530,7 +540,7 @@ class GeminiBridgeWebSocketService:
                     metadata={
                         "session_id": source_id,
                         "engine": "websocket",
-                        "model": self.settings.model,
+                        "model": model,
                     },
                 )
             except Exception:
@@ -607,7 +617,12 @@ class GeminiBridgeWebSocketService:
             await transport.close()
 
     async def serve(self, host: str, port: int, **kwargs):
+        # Cap resources per process. Without these, a connection storm
+        # or many dead idle connections can OOM/CPU-pile the VPS.
         kwargs.setdefault("max_size", MAX_WEBSOCKET_MESSAGE_BYTES)
+        kwargs.setdefault("max_clients", int(os.environ.get("WS_MAX_CLIENTS", "100")))
+        kwargs.setdefault("ping_interval", 20)
+        kwargs.setdefault("ping_timeout", 20)
         return await serve(self.handle, host, port, **kwargs)
 
     async def _run_gemini_session(
@@ -734,10 +749,29 @@ def _session_error_text(exc: Exception) -> str:
     return " ".join(parts)
 
 
+_NSFW_FILTER_CACHE: NsfwFilter | None = None
+_NSFW_FILTER_LOAD_FAILED = False
+
+
 def _load_nsfw_filter_for_service(log: logging.Logger) -> NsfwFilter | None:
+    """Load NSFW filter once and share across all sessions.
+
+    Loading a 17MB ONNX model per WebSocket connection is the #1 cause of
+    VPS CPU/memory spikes. We cache the singleton at module level.
+    ONNX Runtime inference is thread-safe, so concurrent is_safe() calls
+    are fine (they release the GIL during C execution).
+    """
+    global _NSFW_FILTER_CACHE, _NSFW_FILTER_LOAD_FAILED
+    if _NSFW_FILTER_CACHE is not None:
+        return _NSFW_FILTER_CACHE
+    if _NSFW_FILTER_LOAD_FAILED:
+        return None
     try:
-        return NsfwFilter()
+        _NSFW_FILTER_CACHE = NsfwFilter()
+        log.info("nsfw filter loaded (singleton, shared across all sessions)")
+        return _NSFW_FILTER_CACHE
     except Exception as exc:
+        _NSFW_FILTER_LOAD_FAILED = True
         log.warning("nsfw filter unavailable, skipping server-side guard: %s", exc)
         return None
 

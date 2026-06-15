@@ -71,9 +71,12 @@ class AiSeeAgent(Agent):
 
     @function_tool()
     async def call_family_contact(
-        self, contact_name: str, call_type: str = "voice",
+        self, contact_name: str, call_type: str = "video",
     ) -> dict:
-        """Call a family contact by name or relationship with voice or video."""
+        """Call a family contact by name or relationship. Defaults to a
+        video call so family members can see the user (mirrors the
+        support-contact behaviour). Pass ``call_type="voice"`` explicitly to
+        request an audio-only call."""
         return await self._backend.tool_call(
             "call_family_contact", self._uid(),
             {"contact_name": contact_name, "call_type": call_type},

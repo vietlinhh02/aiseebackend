@@ -22,6 +22,36 @@ from backend_models import (
 logger = logging.getLogger("aisee-agent")
 
 
+# ── Shared httpx client (singleton) ──
+# Per-session httpx clients cause repeated TCP/TLS handshakes to Go backend.
+# Sharing one client reuses the connection pool (max 100 keepalive conns).
+# Created lazily on first use, closed on process shutdown.
+_shared_async_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client(base_url: str) -> httpx.AsyncClient:
+    global _shared_async_client
+    if _shared_async_client is None:
+        limits = httpx.Limits(
+            max_connections=200,
+            max_keepalive_connections=100,
+            keepalive_expiry=30.0,
+        )
+        _shared_async_client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=10.0,
+            limits=limits,
+        )
+    return _shared_async_client
+
+
+async def close_shared_client() -> None:
+    global _shared_async_client
+    if _shared_async_client is not None and not _shared_async_client.is_closed:
+        await _shared_async_client.aclose()
+    _shared_async_client = None
+
+
 class BackendClient:
     """Calls Go backend via POST /api/internal/tool-call."""
 
@@ -31,12 +61,14 @@ class BackendClient:
         api_key: str,
         client: httpx.AsyncClient | None = None,
     ):
-        self.client = client or httpx.AsyncClient(
-            base_url=base_url,
-            timeout=10.0,
-        )
+        # Pass an explicit client to take ownership; otherwise use shared pool.
+        if client is not None:
+            self.client = client
+            self._owns_client = True
+        else:
+            self.client = _get_shared_client(base_url)
+            self._owns_client = False
         self.api_key = api_key
-        self._owns_client = client is None
 
     async def _post_json(
         self,

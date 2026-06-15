@@ -43,6 +43,21 @@ Cuộc trò chuyện:
 Thông tin cá nhân:"""
 
 
+# ── Global cap on concurrent summary generation ──
+# Each session can trigger summary every 10 turns. With 100 concurrent users
+# that could be 100 parallel Gemini API calls, easily overwhelming the
+# outbound rate limit and stacking CPU. One semaphore per process is enough.
+_SUMMARY_SEMAPHORE: asyncio.Semaphore | None = None
+_SUMMARY_SEMAPHORE_LIMIT = 3
+
+
+def _get_summary_semaphore() -> asyncio.Semaphore:
+    global _SUMMARY_SEMAPHORE
+    if _SUMMARY_SEMAPHORE is None:
+        _SUMMARY_SEMAPHORE = asyncio.Semaphore(_SUMMARY_SEMAPHORE_LIMIT)
+    return _SUMMARY_SEMAPHORE
+
+
 @dataclass
 class PersistedMemory:
     """Memory loaded from DB for cross-session continuity."""
@@ -297,56 +312,64 @@ class MemoryManager:
             logger.debug("no Gemini API key, skipping summary generation")
             return
 
-        try:
-            from google import genai
-            from google.genai import types
+        # Cap concurrent summary calls process-wide to protect Gemini quota
+        # and CPU. If the cap is saturated, this session skips its summary
+        # (the next turn will try again).
+        sem = _get_summary_semaphore()
+        if sem.locked():
+            logger.debug("summary skipped: global cap reached")
+            return
+        async with sem:
+            try:
+                from google import genai
+                from google.genai import types
 
-            client = genai.Client(api_key=GEMINI_API_KEY)
+                client = genai.Client(api_key=GEMINI_API_KEY)
 
-            # Build conversation text from recent turns
-            conv_lines = []
-            for turn in self.recent_turns[-self._summary_interval * 2:]:
-                role = "User" if turn["role"] == "user" else "Assistant"
-                conv_lines.append(f"{role}: {turn['text']}")
-            conversation = "\n".join(conv_lines)
+                # Build conversation text from recent turns
+                conv_lines = []
+                for turn in self.recent_turns[-self._summary_interval * 2:]:
+                    role = "User" if turn["role"] == "user" else "Assistant"
+                    conv_lines.append(f"{role}: {turn['text']}")
+                conversation = "\n".join(conv_lines)
 
-            if not conversation.strip():
-                return
+                if not conversation.strip():
+                    return
 
-            prompt = SUMMARY_PROMPT.format(conversation=conversation)
+                prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
-            # Use flash for speed and low cost
-            response = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=200,
-                    temperature=0.3,
-                ),
-            )
+                # Use flash for speed and low cost
+                response = await client.aio.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=200,
+                        temperature=0.3,
+                    ),
+                )
 
-            new_summary = (response.text or "").strip()
-            if new_summary:
-                # Merge with existing summary
-                if self.rolling_summary:
-                    self.rolling_summary = f"{self.rolling_summary}\n{new_summary}"
-                else:
-                    self.rolling_summary = new_summary
-                # Cap summary length
-                if len(self.rolling_summary) > 2000:
-                    self.rolling_summary = self.rolling_summary[-2000:]
-                logger.info("generated summary: %d chars", len(new_summary))
+                new_summary = (response.text or "").strip()
+                if new_summary:
+                    # Merge with existing summary
+                    if self.rolling_summary:
+                        self.rolling_summary = f"{self.rolling_summary}\n{new_summary}"
+                    else:
+                        self.rolling_summary = new_summary
+                    # Cap summary length
+                    if len(self.rolling_summary) > 2000:
+                        self.rolling_summary = self.rolling_summary[-2000:]
+                    logger.info("generated summary: %d chars", len(new_summary))
 
-            self._turns_since_summary = 0
+                self._turns_since_summary = 0
 
-            # Also extract facts occasionally (every other summary)
-            if len(self.user_facts) < 20:
-                await self._extract_facts(client, conversation)
+                # Also extract facts occasionally (every other summary)
+                if len(self.user_facts) < 20:
+                    await self._extract_facts(client, conversation)
 
-        except Exception as exc:
-            logger.warning("summary generation failed: %s", exc)
-        finally:
-            self._turns_since_summary = 0
+            except Exception as exc:
+                logger.warning("summary generation failed: %s", exc)
+            finally:
+                self._turns_since_summary = 0
 
     async def _extract_facts(self, client: Any, conversation: str) -> None:
         """Extract user facts from conversation."""
