@@ -252,6 +252,51 @@ TOOL_SPECS = (
         "Từ chối cuộc gọi đến. "
         "CHỈ GỌI khi user nói 'không nghe', 'từ chối', 'tắt'.",
     ),
+    # ── In-app walking navigation (Mapbox Directions + Geocoding) ──
+    ToolSpec(
+        "start_walking_navigation",
+        "Bắt đầu chỉ đường đi bộ IN-APP đến địa điểm. "
+        "Hệ thống geocode + lấy route từ Mapbox, sau đó trả từng bước để agent narrate bằng tiếng Việt. "
+        "Khác với navigate_to (mở Google Maps ngoài), tool này GIỮ trong app + tự cảnh báo vật cản qua camera. "
+        "Gọi khi user nói 'chỉ đường đến [địa điểm]', 'đưa tôi đến [địa điểm]', 'đi đến [địa điểm] bằng đi bộ'. "
+        "Trả về route tóm tắt + bước đầu tiên để agent đọc ngay.",
+        {
+            "destination": ParameterSpec(
+                STRING,
+                "Tên địa điểm hoặc địa chỉ (tiếng Việt). VD: 'Bệnh viện Chợ Rẫy', 'Chợ Bến Thành'.",
+            ),
+        },
+        ["destination"],
+    ),
+    ToolSpec(
+        "announce_navigation_step",
+        "Đọc bước chỉ đường kế tiếp cho user (tiếng Việt, ngắn gọn). "
+        "Hệ thống tự tính step hiện tại, phát hiện lệch hướng, và đánh dấu đã đến đích. "
+        "Gọi tool này mỗi khi cần thông báo bước mới (khoảng 30-60s/lần trong lúc đi, "
+        "hoặc ngay khi user hỏi 'tiếp theo phải đi đâu').",
+        {
+            "current_lat": ParameterSpec(
+                types.Type.NUMBER,
+                "Vĩ độ hiện tại của user (lấy từ get_location).",
+            ),
+            "current_lng": ParameterSpec(
+                types.Type.NUMBER,
+                "Kinh độ hiện tại của user (lấy từ get_location).",
+            ),
+        },
+        ["current_lat", "current_lng"],
+    ),
+    ToolSpec(
+        "stop_navigation",
+        "Kết thúc chỉ đường hiện tại. Lưu lại lịch sử cuốc đi. "
+        "Gọi khi user nói 'dừng', 'hủy', 'thôi không đi nữa', hoặc khi đã đến nơi.",
+        {
+            "outcome": ParameterSpec(
+                STRING,
+                "Lý do kết thúc: 'completed' (đã đến nơi) | 'cancelled' (user hủy) | 'deviated' (lệch quá xa) | 'error' (lỗi).",
+            ),
+        },
+    ),
 )
 
 

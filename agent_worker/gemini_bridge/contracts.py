@@ -52,6 +52,9 @@ class GeminiTool(StrEnum):
 
     # Navigation
     NAVIGATE_TO = "navigate_to"
+    START_WALKING_NAVIGATION = "start_walking_navigation"
+    ANNOUNCE_NAVIGATION_STEP = "announce_navigation_step"
+    STOP_NAVIGATION = "stop_navigation"
 
     # Search
     WEB_SEARCH = "web_search"
@@ -83,6 +86,9 @@ class DeviceCommand(StrEnum):
 
     ENABLE_CAMERA = "enable_camera"
     DISABLE_CAMERA = "disable_camera"
+    SET_CAMERA_FPS = "set_camera_fps"
+    SHOW_NAVIGATION_SCREEN = "show_navigation_screen"
+    HIDE_NAVIGATION_SCREEN = "hide_navigation_screen"
     START_CALL = "start_call"
     SCHEDULE_REMINDER = "schedule_reminder"
     GET_LOCATION = "get_location"
@@ -152,6 +158,7 @@ class ControlAction(StrEnum):
     INCOMING_CALL_CLEARED = "incoming_call_cleared"
     INTERRUPT = "interrupt"
     NSFW_DETECTED = "nsfw_detected"
+    STOP_NAVIGATION = "stop_navigation"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -365,6 +372,7 @@ def validate_tool_consistency() -> list[str]:
         GeminiTool.CALL_SUPPORT_CONTACT,
         GeminiTool.ACTIVATE_CAMERA,
         GeminiTool.DEACTIVATE_CAMERA,
+        GeminiTool.SET_CAMERA_FPS,
         GeminiTool.SET_MEDICATION_REMINDER,
         GeminiTool.SET_APPOINTMENT_REMINDER,
         GeminiTool.EMERGENCY_ALERT,
@@ -372,6 +380,9 @@ def validate_tool_consistency() -> list[str]:
         GeminiTool.ESCALATE_TO_VOLUNTEER,
         GeminiTool.CONTROL_MUSIC,
         GeminiTool.NAVIGATE_TO,
+        GeminiTool.START_WALKING_NAVIGATION,
+        GeminiTool.ANNOUNCE_NAVIGATION_STEP,
+        GeminiTool.STOP_NAVIGATION,
         GeminiTool.WEB_SEARCH,
         GeminiTool.GET_LOCATION,
         GeminiTool.GET_CURRENT_LOCATION,
