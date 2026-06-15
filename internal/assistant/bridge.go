@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -106,15 +108,24 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 
 		proxyCtx, cancel := context.WithCancel(ctx)
 		results := make(chan proxyResult, 2)
-		go b.proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
-		go b.proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			b.proxyFrames(proxyCtx, "client", clientConn, upstreamConn, results)
+		}()
+		go func() {
+			defer wg.Done()
+			b.proxyFrames(proxyCtx, "upstream", upstreamConn, clientConn, results)
+		}()
 
 		result := <-results
 		cancel()
 
 		if result.source == "client" {
-			upstreamConn.Close(websocket.StatusNormalClosure, "client disconnected")
-			_ = drainProxyResult(results)
+			_ = upstreamConn.Close(websocket.StatusNormalClosure, "client disconnected")
+			_ = clientConn.Close(websocket.StatusNormalClosure, "client disconnected")
+			wg.Wait()
 			if isNormalClientDisconnect(result.err) {
 				return nil
 			}
@@ -125,17 +136,21 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 
 		if attempt < b.MaxRetries {
 			upstreamConn.CloseNow()
-			_ = drainProxyResult(results)
+			wg.Wait()
 			continue
 		}
 
+		// Final retry exhausted — surface upstream error to client,
+		// then tear down everything. Use a fresh background context
+		// because the request context is cancelled at this point.
 		ioCtx, ioCancel := backgroundIOContext()
 		defer ioCancel()
-
-		_ = writeBridgeError(ioCtx, clientConn, "assistant_upstream_disconnected", upstreamDisconnectMessage(lastUpstreamErr))
+		if err := writeBridgeError(ioCtx, clientConn, "assistant_upstream_disconnected", upstreamDisconnectMessage(lastUpstreamErr)); err != nil {
+			slog.Warn("bridge_error_write_failed", "error", err)
+		}
 		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant disconnected")
 		upstreamConn.CloseNow()
-		_ = drainProxyResult(results)
+		wg.Wait()
 		return lastUpstreamErr
 	}
 }
@@ -220,18 +235,6 @@ func sessionInitEnvelope(session Session) map[string]any {
 	return map[string]any{
 		"type":    "session_init",
 		"payload": payload,
-	}
-}
-
-func drainProxyResult(results <-chan proxyResult) error {
-	select {
-	case result := <-results:
-		if result.source == "client" && isNormalClientDisconnect(result.err) {
-			return nil
-		}
-		return result.err
-	case <-time.After(250 * time.Millisecond):
-		return nil
 	}
 }
 

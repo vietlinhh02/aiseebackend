@@ -113,9 +113,11 @@ func (f *FCMSender) Send(
 
 	msgInner := msg["message"].(map[string]any)
 
-	// For normal notifications, include notification block.
-	// For incoming calls (voip), use data-only so app
-	// handles display.
+	// For normal notifications, include notification block so the system tray
+	// shows a notification when the app is in the background or killed.
+	// For incoming calls (voip), use data-only so the Flutter app handles
+	// display via flutter_callkit_incoming (the plugin draws the full-screen
+	// CallKit UI on Android; iOS uses PushKit/CallKit).
 	if n.Type != "voip" {
 		msgInner["notification"] = map[string]string{
 			"title": n.Title,
@@ -123,10 +125,20 @@ func (f *FCMSender) Send(
 		}
 	}
 
-	// Android high priority for calls
+	// Android config: high priority + 24h TTL keeps the message reachable
+	// while still respecting FCM rate limits. Without TTL, messages can be
+	// dropped if the device is offline for a long stretch.
 	if n.Type == "voip" {
-		msgInner["android"] = map[string]string{
+		msgInner["android"] = map[string]any{
 			"priority": "HIGH",
+			"ttl":      "86400s",
+		}
+	} else {
+		// For normal messages, normal priority is enough. TTL 1h is plenty
+		// for chat / reminder notifications.
+		msgInner["android"] = map[string]any{
+			"priority": "HIGH",
+			"ttl":      "3600s",
 		}
 	}
 
