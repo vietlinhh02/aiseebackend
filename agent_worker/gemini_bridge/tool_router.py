@@ -8,6 +8,7 @@ Uses:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -48,6 +49,7 @@ class ToolRouter:
     executor: SafeToolExecutor | None = None
     local_participant: object | None = None
     search_client: object | None = None
+    navigation_client: object | None = None  # MapboxNavigationClient (lazy)
     on_camera_state_change: object | None = None
     _handlers: dict[str, ToolHandler] = field(init=False, repr=False)
 
@@ -107,6 +109,16 @@ class ToolRouter:
         user_id = self._uid()
         if not user_id:
             return
+        # Fire-and-forget: don't block the tool call hot path on tracking HTTP.
+        # The task is bounded by the per-process concurrency cap; failures are
+        # silently dropped because tracking is observability, not correctness.
+        asyncio.create_task(
+            self._send_tool_call_tracking(backend, user_id, name, result)
+        )
+
+    async def _send_tool_call_tracking(
+        self, backend, user_id: str, name: str, result: dict
+    ) -> None:
         try:
             await backend.record_tracking_event(
                 event_type="ai_tool_call",
@@ -149,6 +161,9 @@ class ToolRouter:
                 GeminiTool.ESCALATE_TO_FAMILY: self._escalate_to_family,
                 GeminiTool.CONTROL_MUSIC: self._music_disabled,
                 GeminiTool.NAVIGATE_TO: self._navigate_to,
+                GeminiTool.START_WALKING_NAVIGATION: self._start_walking_navigation,
+                GeminiTool.ANNOUNCE_NAVIGATION_STEP: self._announce_navigation_step,
+                GeminiTool.STOP_NAVIGATION: self._stop_navigation,
                 GeminiTool.ESCALATE_TO_VOLUNTEER: self._call_support_contact,
                 GeminiTool.WEB_SEARCH: self._web_search,
                 GeminiTool.GET_LOCATION: self._get_location,
@@ -418,8 +433,18 @@ class ToolRouter:
 
     @staticmethod
     def _normalize_call_type(value: Any) -> str:
+        """Coerce a tool-provided call type to ``"video"`` or ``"voice"``.
+
+        Default is **video** when the value is missing/empty/unknown — see
+        ``_call_family_contact`` and ``_call_support_contact`` which assume
+        the call should be a video call unless the caller explicitly opts
+        out. This matches the product requirement: family and support calls
+        should be video by default so the receiving party can see the user.
+        """
         text = str(value or "").strip().lower()
-        return "video" if text == "video" else "voice"
+        if text == "voice":
+            return "voice"
+        return "video"
 
     @staticmethod
     def _call_start_timeout_seconds(result: dict[str, Any]) -> float:
@@ -485,6 +510,345 @@ class ToolRouter:
             source_id, {"destination": destination},
         )
         return result
+
+    # ── In-app walking navigation (Mapbox Directions + Geocoding) ──
+
+    def _get_navigation_client(self):
+        """Lazy-init Mapbox client từ env. Cached trong self."""
+        if self.navigation_client is None:
+            from .mapbox_navigation import MapboxNavigationClient
+            self.navigation_client = MapboxNavigationClient.from_env()
+        return self.navigation_client
+
+    def _get_nav_state(self) -> dict[str, Any]:
+        """Lấy user_context["navigation_state"] (in-memory, per-session)."""
+        if "navigation_state" not in self.user_context:
+            self.user_context["navigation_state"] = None
+        return self.user_context
+
+    async def _start_walking_navigation(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Geocode destination + lấy walking route, lưu vào session state."""
+        from .mapbox_navigation import GeoPoint, NavigationSession
+
+        destination = (args.get("destination") or "").strip()
+        if not destination:
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                "start_walking_navigation: thiếu destination",
+            )
+
+        client = self._get_navigation_client()
+        if not client.is_configured:
+            return tool_error(
+                ToolErrorCode.DEVICE_UNAVAILABLE,
+                "chỉ đường chưa được cấu hình (thiếu MAPBOX_NAVIGATION_TOKEN)",
+                recoverable=False,
+            )
+
+        # Nếu đã có session active, dừng session cũ trước
+        if self.user_context.get("navigation_state"):
+            old = self.user_context["navigation_state"]
+            old.outcome = "cancelled"
+
+        # 1. Lấy vị trí hiện tại từ Flutter
+        loc_result = await self._device_request(DeviceCommand.GET_LOCATION, {}, timeout=10.0)
+        loc = loc_result.get("data", loc_result) if isinstance(loc_result, dict) else {}
+        if not isinstance(loc, dict) or not loc.get("lat") or not loc.get("lng"):
+            return tool_error(
+                ToolErrorCode.DEVICE_UNAVAILABLE,
+                "không lấy được vị trí hiện tại để bắt đầu chỉ đường",
+            )
+        origin = GeoPoint(lat=float(loc["lat"]), lng=float(loc["lng"]))
+
+        # 2. Geocode destination
+        geo = await client.geocode(destination, proximity=origin)
+        if geo.get("status") != "ok":
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                f"không tìm được địa điểm: {destination}. {geo.get('error', '')}",
+            )
+        destination_point = GeoPoint(lat=float(geo["lat"]), lng=float(geo["lng"]))
+
+        # 3. Lấy walking route
+        route_resp = await client.walking_route(origin, destination_point)
+        if route_resp.get("status") != "ok":
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                f"không tìm được đường đi bộ: {route_resp.get('error', '')}",
+            )
+        route = route_resp["route"]
+
+        if not route.steps:
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                "Mapbox trả route không có bước chỉ đường",
+            )
+
+        # 3.5 Safety guardrail: cầm điện thoại đi bộ xa rất nguy hiểm cho người
+        # khiếm thị/người già. Từ chối nếu quá xa và đề xuất phương án khác.
+        from config import NAV_MAX_DISTANCE_M
+        if route.total_distance_m > NAV_MAX_DISTANCE_M:
+            km = route.total_distance_m / 1000.0
+            max_km = NAV_MAX_DISTANCE_M / 1000.0
+            return {
+                "status": "refused_too_far",
+                "total_distance_m": round(route.total_distance_m, 1),
+                "max_distance_m": NAV_MAX_DISTANCE_M,
+                "hint_for_agent": (
+                    f"Quãng đường đi bộ là {km:.1f}km — quá xa để chỉ đường đi bộ "
+                    f"trong app (max {max_km:.1f}km vì lý do an toàn). "
+                    f"Đề xuất user: 1) gọi xe ôm/grab, 2) gọi con/cháu đưa đón, "
+                    f"3) đi taxi với người nhà. Nếu user thật sự muốn đi bộ và xác "
+                    f"nhận an toàn, có thể chia thành nhiều cuốc nhỏ hoặc tăng "
+                    f"NAV_MAX_DISTANCE_M trong env."
+                ),
+            }
+
+        # 4. Lưu session state
+        import time
+        session = NavigationSession(
+            route=route,
+            started_at=time.time(),
+            destination_query=destination,
+            origin_point=origin,
+        )
+        self.user_context["navigation_state"] = session
+
+        # 5. Bật camera nếu chưa — để nhìn vật cản
+        #    + bump FPS lên 600ms (~1.67 fps) để Gemini thấy rõ vật cản
+        try:
+            await self._device_request(
+                DeviceCommand.SET_CAMERA_FPS,
+                {"interval_ms": 600},
+                timeout=4.0,
+            )
+        except Exception as exc:
+            logger.warning("nav: cannot set camera FPS: %s", exc)
+
+        if not self.runtime_state.camera.enabled:
+            try:
+                await self._device_request(
+                    DeviceCommand.ENABLE_CAMERA, {}, timeout=6.0
+                )
+            except Exception as exc:
+                logger.warning("nav: cannot enable camera automatically: %s", exc)
+
+        # 6. Track quota
+        try:
+            await self.backend.check_quota(self._uid(), "navigation_sessions", 1)
+            await self.backend.record_usage(
+                self._uid(), "navigation_sessions", 1, "sessions", "agent",
+                f"nav-{uuid.uuid4()}",
+                {
+                    "destination": destination,
+                    "destination_name": geo.get("name", ""),
+                    "total_distance_m": route.total_distance_m,
+                    "total_steps": len(route.steps),
+                    "mode": "in_app_walking",
+                },
+            )
+        except Exception as exc:
+            logger.warning("nav: quota tracking failed (non-blocking): %s", exc)
+
+        first_step = route.steps[0]
+
+        # Hiện navigation screen trên Flutter (UI overlay toàn màn hình
+        # với destination + step hiện tại + nút dừng)
+        try:
+            await self._device_request(
+                DeviceCommand.SHOW_NAVIGATION_SCREEN,
+                {
+                    "destination_name": geo.get("name", destination),
+                    "destination_query": destination,
+                    "destination_lat": destination_point.lat,
+                    "destination_lng": destination_point.lng,
+                    "origin_lat": origin.lat,
+                    "origin_lng": origin.lng,
+                    "total_distance_m": round(route.total_distance_m, 1),
+                    "total_duration_s": round(route.total_duration_s, 1),
+                    "total_steps": len(route.steps),
+                    "first_step_name": first_step.name,
+                    "first_step_instruction_english": first_step.instruction_text,
+                    "first_step_voice_english": first_step.voice_text,
+                    "first_step_distance_m": round(first_step.distance_m, 1),
+                    "max_distance_m": NAV_MAX_DISTANCE_M,
+                },
+                timeout=4.0,
+            )
+        except Exception as exc:
+            logger.warning("nav: cannot show navigation screen: %s", exc)
+
+        return {
+            "status": "ok",
+            "destination_name": geo.get("name", destination),
+            "total_distance_m": round(route.total_distance_m, 1),
+            "total_duration_s": round(route.total_duration_s, 1),
+            "total_steps": len(route.steps),
+            "first_step_instruction_english": first_step.instruction_text,
+            "first_step_voice_english": first_step.voice_text,
+            "first_step_name": first_step.name,
+            "first_step_distance_m": round(first_step.distance_m, 1),
+            "origin_lat": origin.lat,
+            "origin_lng": origin.lng,
+            "destination_lat": destination_point.lat,
+            "destination_lng": destination_point.lng,
+            "hint_for_agent": (
+                "Dịch 'first_step_voice_english' sang tiếng Việt tự nhiên và đọc cho user. "
+                "KHÔNG đọc 'instruction_english' nguyên văn. "
+                "Dùng 'total_distance_m' / 'total_duration_s' để thông báo tổng quãng đường + thời gian ước tính."
+            ),
+        }
+
+    async def _announce_navigation_step(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Tính step hiện tại + deviation, trả cho Gemini narrate."""
+        from .mapbox_navigation import GeoPoint, evaluate_progress
+
+        from config import NAV_DEVIATION_METERS, NAV_DEVIATION_SECONDS
+
+        session = self.user_context.get("navigation_state")
+        if session is None:
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                "chưa có cuốc chỉ đường nào đang active. Gọi start_walking_navigation trước.",
+            )
+
+        try:
+            current = GeoPoint(
+                lat=float(args.get("current_lat") or 0),
+                lng=float(args.get("current_lng") or 0),
+            )
+        except (TypeError, ValueError):
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                "current_lat / current_lng không hợp lệ",
+            )
+
+        if current.lat == 0 and current.lng == 0:
+            return tool_error(
+                ToolErrorCode.UNKNOWN,
+                "vĩ độ/kinh độ bằng 0 — không xác định được vị trí",
+            )
+
+        progress = evaluate_progress(
+            session,
+            current,
+            deviation_threshold_m=NAV_DEVIATION_METERS,
+            deviation_cooldown_s=NAV_DEVIATION_SECONDS,
+        )
+
+        # Nếu đã đến đích → tự stop
+        if progress["is_completed"] and session.outcome != "completed":
+            session.outcome = "completed"
+            self.user_context["navigation_state"] = None
+            progress["auto_stopped"] = True
+            # Ẩn nav screen trên Flutter
+            try:
+                await self._device_request(
+                    DeviceCommand.HIDE_NAVIGATION_SCREEN,
+                    {"outcome": "completed"},
+                    timeout=3.0,
+                )
+            except Exception:
+                pass
+
+        progress["hint_for_agent"] = (
+            "Nếu should_alert_deviation=true: nói ngắn 'Có vẻ bạn đang đi lệch, "
+            "hãy quay lại hướng [tên đường hiện tại]'. "
+            "Nếu is_completed=true: thông báo 'Bạn đã đến nơi' rồi dừng. "
+            "Nếu KHÔNG: dịch current_step_voice_text sang tiếng Việt và đọc cho user. "
+            "Khi đọc xong, KHÔNG cần gọi tool gì thêm — chờ user đi tiếp."
+        )
+        return {"status": "ok", **progress}
+
+    async def _stop_navigation(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Kết thúc cuốc navigation hiện tại + lưu lịch sử."""
+        import time
+
+        from config import NAV_DEVIATION_METERS
+
+        session = self.user_context.get("navigation_state")
+        if session is None:
+            return {
+                "status": "ok",
+                "was_active": False,
+                "message": "không có cuốc chỉ đường nào đang active",
+            }
+
+        outcome = (args.get("outcome") or "cancelled").strip()
+        if outcome not in ("completed", "cancelled", "deviated", "error"):
+            outcome = "cancelled"
+        session.outcome = outcome
+        now = time.time()
+        duration_s = int(now - session.started_at)
+
+        # Lưu record tracking (fire-and-forget)
+        try:
+            await self.backend.record_usage(
+                self._uid(),
+                "navigation_trips",
+                1,
+                "trips",
+                "agent",
+                f"navtrip-{uuid.uuid4()}",
+                {
+                    "destination_query": session.destination_query,
+                    "origin_lat": session.origin_point.lat,
+                    "origin_lng": session.origin_point.lng,
+                    "destination_lat": session.route.destination_point.lat,
+                    "destination_lng": session.route.destination_point.lng,
+                    "total_distance_m": round(session.route.total_distance_m, 1),
+                    "total_duration_estimated_s": round(session.route.total_duration_s, 1),
+                    "actual_duration_s": duration_s,
+                    "total_steps": len(session.route.steps),
+                    "steps_completed": session.current_step_index,
+                    "deviation_count": session.deviation_count,
+                    "outcome": outcome,
+                    "mode": "in_app_walking",
+                },
+            )
+        except Exception as exc:
+            logger.warning("nav: failed to record trip history: %s", exc)
+
+        # Tắt camera nếu đang bật do navigation
+        if self.runtime_state.camera.enabled:
+            try:
+                await self._device_request(DeviceCommand.DISABLE_CAMERA, {}, timeout=5.0)
+            except Exception:
+                pass
+
+        # Khôi phục FPS mặc định nếu camera vẫn đang chạy cho việc khác
+        # (ví dụ user mở camera để xem thứ khác sau khi dừng nav)
+        try:
+            await self._device_request(
+                DeviceCommand.SET_CAMERA_FPS,
+                {"interval_ms": 1000},
+                timeout=4.0,
+            )
+        except Exception:
+            pass
+
+        # Ẩn navigation screen trên Flutter
+        try:
+            await self._device_request(
+                DeviceCommand.HIDE_NAVIGATION_SCREEN,
+                {"outcome": outcome},
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+
+        self.user_context["navigation_state"] = None
+
+        return {
+            "status": "ok",
+            "was_active": True,
+            "outcome": outcome,
+            "duration_s": duration_s,
+            "deviation_count": session.deviation_count,
+            "steps_completed": session.current_step_index,
+            "total_steps": len(session.route.steps),
+            "total_distance_m": round(session.route.total_distance_m, 1),
+        }
 
     # ── Search ──
 

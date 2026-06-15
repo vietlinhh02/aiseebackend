@@ -392,6 +392,21 @@ class GeminiTransportSession:
                 except Exception:
                     logger.warning("failed to record nsfw tracking event", exc_info=True)
             return
+        if event.action == ControlAction.STOP_NAVIGATION:
+            # User bấm nút "Dừng chỉ đường" trên UI overlay Flutter.
+            # Gọi trực tiếp stop_navigation tool (không qua Gemini) để
+            # dismiss UI + cleanup camera + lưu DB ngay.
+            try:
+                outcome = (
+                    event.payload.get("outcome", "cancelled")
+                    if isinstance(event.payload, dict) else "cancelled"
+                )
+                await self.tool_router.call(
+                    "stop_navigation", {"outcome": outcome}
+                )
+            except Exception as exc:
+                logger.warning("stop_navigation via control failed: %s", exc)
+            return
         logger.info("ignoring unsupported control action=%s", event.action)
 
 
