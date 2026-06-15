@@ -45,6 +45,23 @@ class Settings(BaseSettings):
     exa_search_url: str = Field("https://api.exa.ai/search", alias="EXA_SEARCH_URL")
     exa_search_max_results: int = Field(3, alias="EXA_SEARCH_MAX_RESULTS")
 
+    # Mapbox Directions/Geocoding (for in-app walking navigation)
+    mapbox_navigation_token: str = Field("", alias="MAPBOX_NAVIGATION_TOKEN")
+    mapbox_directions_base_url: str = Field(
+        "https://api.mapbox.com/directions/v5",
+        alias="MAPBOX_DIRECTIONS_BASE_URL",
+    )
+    mapbox_geocoding_base_url: str = Field(
+        "https://api.mapbox.com/geocoding/v5",
+        alias="MAPBOX_GEOCODING_BASE_URL",
+    )
+    nav_deviation_meters: float = Field(50.0, alias="NAV_DEVIATION_METERS")
+    nav_deviation_seconds: float = Field(30.0, alias="NAV_DEVIATION_SECONDS")
+    # Safety guardrail: từ chối walking nav nếu quãng đường > ngưỡng này.
+    # Người khiếm thị/người già cầm điện thoại đi xa là rất nguy hiểm.
+    # 2km = ~25-30 phút đi bộ — đã là max hợp lý.
+    nav_max_distance_m: float = Field(2000.0, alias="NAV_MAX_DISTANCE_M")
+
     ai_transport: str = Field("websocket", alias="AI_TRANSPORT")
     assistant_ws_host: str = Field("0.0.0.0", alias="ASSISTANT_WS_HOST")
     assistant_ws_port: int = Field(8765, alias="ASSISTANT_WS_PORT")
@@ -88,6 +105,12 @@ AI_COST_PRICING_VERSION = settings.ai_cost_pricing_version
 EXA_API_KEY = settings.exa_api_key
 EXA_SEARCH_URL = settings.exa_search_url
 EXA_SEARCH_MAX_RESULTS = settings.exa_search_max_results
+MAPBOX_NAVIGATION_TOKEN = settings.mapbox_navigation_token
+MAPBOX_DIRECTIONS_BASE_URL = settings.mapbox_directions_base_url
+MAPBOX_GEOCODING_BASE_URL = settings.mapbox_geocoding_base_url
+NAV_DEVIATION_METERS = settings.nav_deviation_meters
+NAV_DEVIATION_SECONDS = settings.nav_deviation_seconds
+NAV_MAX_DISTANCE_M = settings.nav_max_distance_m
 AI_TRANSPORT = settings.ai_transport.lower()
 ASSISTANT_WS_HOST = settings.assistant_ws_host
 ASSISTANT_WS_PORT = settings.assistant_ws_port
