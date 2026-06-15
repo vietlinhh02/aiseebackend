@@ -45,7 +45,7 @@ jobs:
         run: |
           uv venv
           uv pip install --python .venv/bin/python -e . pytest anyio
-          .venv/bin/python -m pytest tests/test_schemas.py tests/test_tool_router.py tests/test_gemini_session_events.py
+          .venv/bin/python -m pytest tests/test_schemas.py tests/test_tool_router.py tests/test_gemini_session_events.py tests/test_websocket_service.py
 
   publish-images:
     name: Publish ${{ matrix.service }} image

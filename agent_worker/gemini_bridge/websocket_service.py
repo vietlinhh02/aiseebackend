@@ -522,7 +522,6 @@ class GeminiBridgeWebSocketService:
             session_id=source_id,
         )
         session_started_at: datetime | None = None
-        session_failed = False
 
         # Start periodic memory persistence
         runtime_state.start_memory_periodic_save()
@@ -588,7 +587,6 @@ class GeminiBridgeWebSocketService:
                 self.log.info("assistant session disconnected normally")
                 await _emit_tracking(backend, "ai_session_ended")
             else:
-                session_failed = True
                 code = _session_error_code(exc)
                 self.log.warning("assistant session failed code=%s error=%s", code, exc)
                 await _emit_tracking(backend, "ai_session_failed")
@@ -655,27 +653,6 @@ class GeminiBridgeWebSocketService:
             await self.handle(websocket)
         finally:
             _active_ws_handlers -= 1
-
-
-def _build_process_request(max_clients: int):
-    """Return a ``process_request`` callback that 503s when at capacity.
-
-    The returned coroutine is invoked by ``websockets.serve`` for every
-    incoming HTTP upgrade request, before the WebSocket handshake is
-    completed.
-    """
-
-    async def process_request(connection, request):  # noqa: ARG001
-        if _active_ws_handlers >= max_clients:
-            logger.warning(
-                "ws server at capacity active=%d max=%d, rejecting new connection",
-                _active_ws_handlers,
-                max_clients,
-            )
-            return connection.respond(503, "Server at capacity, please retry")
-        return None
-
-    return process_request
 
     async def _run_gemini_session(
         self,
@@ -770,6 +747,27 @@ def _build_process_request(max_clients: int):
         result = close()
         if asyncio.iscoroutine(result):
             await result
+
+
+def _build_process_request(max_clients: int):
+    """Return a ``process_request`` callback that 503s when at capacity.
+
+    The returned coroutine is invoked by ``websockets.serve`` for every
+    incoming HTTP upgrade request, before the WebSocket handshake is
+    completed.
+    """
+
+    async def process_request(connection, request):  # noqa: ARG001
+        if _active_ws_handlers >= max_clients:
+            logger.warning(
+                "ws server at capacity active=%d max=%d, rejecting new connection",
+                _active_ws_handlers,
+                max_clients,
+            )
+            return connection.respond(503, "Server at capacity, please retry")
+        return None
+
+    return process_request
 
 
 def _session_error_code(exc: Exception) -> str:
