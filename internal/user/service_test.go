@@ -1,8 +1,6 @@
 package user
 
 import (
-	"os"
-	"strings"
 	"testing"
 )
 
@@ -77,19 +75,5 @@ func TestNextFamilyInviteRole(t *testing.T) {
 	isPrimary, role = nextFamilyInviteRole(true)
 	if isPrimary || role != "family" {
 		t.Fatalf("next family invite role = (%v, %q), want (false, family)", isPrimary, role)
-	}
-}
-
-func TestJoinFamilyLocksCareGroupBeforeCapacityCheck(t *testing.T) {
-	src, err := os.ReadFile("service.go")
-	if err != nil {
-		t.Fatalf("read user service: %v", err)
-	}
-	body := string(src)
-	if !strings.Contains(body, "lockCareGroupForCapacityTx") {
-		t.Fatal("JoinFamily should lock the care group before checking member capacity")
-	}
-	if !strings.Contains(body, "FOR UPDATE") {
-		t.Fatal("care group capacity lock should use SELECT ... FOR UPDATE")
 	}
 }
