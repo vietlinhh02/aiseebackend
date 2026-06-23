@@ -56,13 +56,13 @@ func (s *PGStore) LoadWindow(
 		return WindowData{}, err
 	}
 	return WindowData{
-		Medications:    medications,
-		MedicationLogs: logs,
-		Symptoms:       symptoms,
-		Metrics:        metrics,
-		Audits:         audits,
-		Calls:          calls,
-		CareEvents:     careEv,
+		Medications:     medications,
+		MedicationLogs:  logs,
+		Symptoms:        symptoms,
+		Metrics:         metrics,
+		Audits:          audits,
+		Calls:           calls,
+		CareEvents:      careEv,
 		NavigationTrips: navTrips,
 	}, nil
 }

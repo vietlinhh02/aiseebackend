@@ -115,10 +115,10 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// No memory found — return empty (not an error)
 		response.JSON(w, http.StatusOK, map[string]any{
-			"found":    false,
-			"summary":  "",
-			"turns":    []any{},
-			"facts":    []any{},
+			"found":   false,
+			"summary": "",
+			"turns":   []any{},
+			"facts":   []any{},
 		})
 		return
 	}
@@ -131,14 +131,14 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal([]byte(pendingTasks), &tasks)
 
 	response.JSON(w, http.StatusOK, map[string]any{
-		"found":          true,
-		"session_id":     fetchedSID,
-		"summary":        summary,
-		"turns":          turns,
-		"facts":          facts,
-		"last_intent":    lastIntent,
-		"pending_tasks":  tasks,
-		"last_mode":      lastMode,
+		"found":         true,
+		"session_id":    fetchedSID,
+		"summary":       summary,
+		"turns":         turns,
+		"facts":         facts,
+		"last_intent":   lastIntent,
+		"pending_tasks": tasks,
+		"last_mode":     lastMode,
 	})
 }
 

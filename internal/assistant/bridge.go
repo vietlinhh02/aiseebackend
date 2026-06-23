@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	DefaultBridgeURL        = "ws://127.0.0.1:8765/ws"
-	BridgeReadLimit         = 8 << 20
-	maxUpstreamRetries      = 8
-	upstreamBackoffBaseSec  = 1
-	upstreamBackoffMaxSec   = 30
+	DefaultBridgeURL         = "ws://127.0.0.1:8765/ws"
+	BridgeReadLimit          = 8 << 20
+	maxUpstreamRetries       = 8
+	upstreamBackoffBaseSec   = 1
+	upstreamBackoffMaxSec    = 30
 	upstreamBackoffJitterPct = 0.5
 )
 

@@ -71,13 +71,13 @@ type Service struct {
 }
 
 type WindowData struct {
-	Medications    []MedicationInfo
-	MedicationLogs []MedicationLogEntry
-	Symptoms       []SymptomEntry
-	Metrics        []MetricEntry
-	Audits         []AuditEntry
-	Calls          []CallUsageEntry
-	CareEvents     []CareEventRow
+	Medications     []MedicationInfo
+	MedicationLogs  []MedicationLogEntry
+	Symptoms        []SymptomEntry
+	Metrics         []MetricEntry
+	Audits          []AuditEntry
+	Calls           []CallUsageEntry
+	CareEvents      []CareEventRow
 	NavigationTrips []NavigationTrip
 }
 
@@ -148,19 +148,19 @@ type TimelineResponse struct {
 }
 
 type ReportTotals struct {
-	ActiveMedications  int     `json:"active_medications"`
-	TakenMedications   int     `json:"taken_medications"`
-	SkippedMedications int     `json:"skipped_medications"`
-	SymptomCount       int     `json:"symptom_count"`
-	MetricCount        int     `json:"metric_count"`
-	SOSAlertCount      int     `json:"sos_alert_count"`
-	EscalationCount    int     `json:"escalation_count"`
-	VideoCallCount     int     `json:"video_call_count"`
-	VideoCallMinutes   float64 `json:"video_call_minutes"`
-	VoiceCallMinutes   float64 `json:"voice_call_minutes"`
-	NavigationTrips    int     `json:"navigation_trips"`
-	NavigationTripsCompleted int `json:"navigation_trips_completed"`
-	NavigationTripsDeviated  int `json:"navigation_trips_deviated"`
+	ActiveMedications        int     `json:"active_medications"`
+	TakenMedications         int     `json:"taken_medications"`
+	SkippedMedications       int     `json:"skipped_medications"`
+	SymptomCount             int     `json:"symptom_count"`
+	MetricCount              int     `json:"metric_count"`
+	SOSAlertCount            int     `json:"sos_alert_count"`
+	EscalationCount          int     `json:"escalation_count"`
+	VideoCallCount           int     `json:"video_call_count"`
+	VideoCallMinutes         float64 `json:"video_call_minutes"`
+	VoiceCallMinutes         float64 `json:"voice_call_minutes"`
+	NavigationTrips          int     `json:"navigation_trips"`
+	NavigationTripsCompleted int     `json:"navigation_trips_completed"`
+	NavigationTripsDeviated  int     `json:"navigation_trips_deviated"`
 	NavigationDistanceM      float64 `json:"navigation_distance_m"`
 }
 
@@ -172,29 +172,29 @@ type DailyBriefResponse struct {
 
 // NavigationTrip = 1 cuốc đi bộ trong app (Mapbox walking route)
 type NavigationTrip struct {
-	ID                     string    `json:"id"`
-	DestinationQuery       string    `json:"destination_query"`
-	DestinationName        string    `json:"destination_name,omitempty"`
-	OriginLat              float64   `json:"origin_lat"`
-	OriginLng              float64   `json:"origin_lng"`
-	DestinationLat         float64   `json:"destination_lat,omitempty"`
-	DestinationLng         float64   `json:"destination_lng,omitempty"`
-	TotalDistanceM         float64   `json:"total_distance_m"`
-	TotalDurationEstimatedS float64  `json:"total_duration_estimated_s"`
-	ActualDurationS        int       `json:"actual_duration_s"`
-	TotalSteps             int       `json:"total_steps"`
-	StepsCompleted         int       `json:"steps_completed"`
-	DeviationCount         int       `json:"deviation_count"`
-	Outcome                string    `json:"outcome"` // completed | cancelled | deviated | error | in_progress
-	Mode                   string    `json:"mode"`
-	StartedAt              time.Time `json:"started_at"`
-	EndedAt                time.Time `json:"ended_at,omitempty"`
+	ID                      string    `json:"id"`
+	DestinationQuery        string    `json:"destination_query"`
+	DestinationName         string    `json:"destination_name,omitempty"`
+	OriginLat               float64   `json:"origin_lat"`
+	OriginLng               float64   `json:"origin_lng"`
+	DestinationLat          float64   `json:"destination_lat,omitempty"`
+	DestinationLng          float64   `json:"destination_lng,omitempty"`
+	TotalDistanceM          float64   `json:"total_distance_m"`
+	TotalDurationEstimatedS float64   `json:"total_duration_estimated_s"`
+	ActualDurationS         int       `json:"actual_duration_s"`
+	TotalSteps              int       `json:"total_steps"`
+	StepsCompleted          int       `json:"steps_completed"`
+	DeviationCount          int       `json:"deviation_count"`
+	Outcome                 string    `json:"outcome"` // completed | cancelled | deviated | error | in_progress
+	Mode                    string    `json:"mode"`
+	StartedAt               time.Time `json:"started_at"`
+	EndedAt                 time.Time `json:"ended_at,omitempty"`
 }
 
 type NavigationHistoryResponse struct {
-	Trips   []NavigationTrip `json:"trips"`
-	Total   int              `json:"total"`
-	WindowDays int           `json:"window_days"`
+	Trips      []NavigationTrip `json:"trips"`
+	Total      int              `json:"total"`
+	WindowDays int              `json:"window_days"`
 }
 
 type WeeklyReportResponse struct {
