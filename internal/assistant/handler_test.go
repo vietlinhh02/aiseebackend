@@ -381,32 +381,6 @@ func newTestRouterWithBridge(secret string, bridge Bridge) http.Handler {
 	return r
 }
 
-func createSession(t *testing.T, baseURL, secret string) SessionDescriptor {
-	t.Helper()
-
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/ai/session", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+signedToken(t, secret, "user-123", "user", "access"))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	var descriptor SessionDescriptor
-	if err := json.NewDecoder(resp.Body).Decode(&descriptor); err != nil {
-		t.Fatalf("decode descriptor: %v", err)
-	}
-	return descriptor
-}
-
 func signedToken(t *testing.T, secret, sub, role, tokenType string) string {
 	t.Helper()
 	return signedTokenWithClaims(t, secret, jwt.MapClaims{
