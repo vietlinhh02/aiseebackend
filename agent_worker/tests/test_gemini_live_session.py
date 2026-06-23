@@ -16,10 +16,20 @@ def test_live_settings_build_audio_config_for_gemini_31():
     audio_blob = settings.audio_blob(b"pcm")
 
     assert config.response_modalities == [types.Modality.AUDIO]
-    assert config.speech_config.voice_config.prebuilt_voice_config.voice_name == "Aoede"
-    assert config.thinking_config.thinking_level is types.ThinkingLevel.LOW
+    speech_config = config.speech_config
+    assert speech_config is not None
+    voice_config = speech_config.voice_config
+    assert voice_config is not None
+    prebuilt_voice_config = voice_config.prebuilt_voice_config
+    assert prebuilt_voice_config is not None
+    assert prebuilt_voice_config.voice_name == "Aoede"
+    thinking_config = config.thinking_config
+    assert thinking_config is not None
+    assert thinking_config.thinking_level is types.ThinkingLevel.LOW
+    realtime_input_config = config.realtime_input_config
+    assert realtime_input_config is not None
     assert (
-        config.realtime_input_config.activity_handling
+        realtime_input_config.activity_handling
         is types.ActivityHandling.NO_INTERRUPTION
     )
     assert audio_blob.data == b"pcm"

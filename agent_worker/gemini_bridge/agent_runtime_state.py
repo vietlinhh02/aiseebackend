@@ -405,7 +405,7 @@ class AgentRuntimeState:
             "event": "tool_timeout",
             "request_id": request_id,
             "name": result.name if result else "unknown",
-            "message": f"tool timed out",
+            "message": "tool timed out",
         })
         self.updated_at = time.monotonic()
         return result

@@ -22,12 +22,12 @@ def test_config_no_longer_exposes_ai_engine_switch(monkeypatch):
 
 
 def test_ai_cost_pricing_version_defaults_when_unset():
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
 
     assert settings.ai_cost_pricing_version == DEFAULT_AI_COST_PRICING_VERSION
 
 
 def test_ai_cost_pricing_version_defaults_when_blank():
-    settings = Settings(AI_COST_PRICING_VERSION=" ")
+    settings = Settings(AI_COST_PRICING_VERSION=" ")  # type: ignore[call-arg]
 
     assert settings.ai_cost_pricing_version == DEFAULT_AI_COST_PRICING_VERSION

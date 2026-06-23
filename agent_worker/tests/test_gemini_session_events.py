@@ -181,10 +181,7 @@ async def test_event_handler_returns_error_response_when_one_tool_raises():
 @pytest.mark.anyio
 async def test_cancel_track_tasks_tolerates_self_removing_callbacks():
     async def wait_forever():
-        try:
-            await asyncio.sleep(60)
-        finally:
-            return None
+        await asyncio.sleep(60)
 
     task = asyncio.create_task(wait_forever())
     tasks = {task}
@@ -277,8 +274,10 @@ def test_live_config_prompt_includes_exact_camera_tool_rules():
     )
 
     config = settings.build_live_config_with_prompt("base prompt")
+    system_instruction = config.system_instruction
+    assert isinstance(system_instruction, str)
 
-    assert "activate_camera" in config.system_instruction
-    assert "deactivate_camera" in config.system_instruction
-    assert "đồng ý rõ ràng" in config.system_instruction
-    assert "tắt đi" in config.system_instruction
+    assert "activate_camera" in system_instruction
+    assert "deactivate_camera" in system_instruction
+    assert "đồng ý rõ ràng" in system_instruction
+    assert "tắt đi" in system_instruction

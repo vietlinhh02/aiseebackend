@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .contracts import ToolErrorCode, tool_error, tool_timeout
+from .contracts import ToolErrorCode, tool_error
 
 logger = logging.getLogger("aisee-agent")
 

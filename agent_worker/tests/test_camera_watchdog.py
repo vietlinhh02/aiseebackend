@@ -5,7 +5,6 @@ import pytest
 
 from gemini_bridge.agent_runtime_state import (
     AgentRuntimeState,
-    CAMERA_WATCHDOG_TIMEOUT_SECONDS,
 )
 
 

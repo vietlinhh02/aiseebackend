@@ -20,7 +20,6 @@ from camera_activation_policy import validate_camera_activation_consent
 
 from .agent_runtime_state import AgentRuntimeState
 from .contracts import (
-    AUDIO_INTERRUPT_COMMANDS,
     BACKEND_ONLY_TOOLS,
     BACKEND_TOOL_TIMEOUTS,
     DeviceCommand,
@@ -764,7 +763,6 @@ class ToolRouter:
         """Kết thúc cuốc navigation hiện tại + lưu lịch sử."""
         import time
 
-        from config import NAV_DEVIATION_METERS
 
         session = self.user_context.get("navigation_state")
         if session is None:

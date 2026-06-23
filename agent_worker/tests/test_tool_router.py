@@ -854,7 +854,7 @@ async def test_router_start_walking_navigation_refuses_too_far_destination():
     class FarAwayClient(FakeNavigationClient):
         async def walking_route(self, origin, destination):
             from gemini_bridge.mapbox_navigation import (
-                GeoPoint, NavigationStep, NavigationRoute,
+                NavigationStep, NavigationRoute,
             )
             # Route 5km — quá xa
             route = NavigationRoute(

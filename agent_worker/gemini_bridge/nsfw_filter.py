@@ -46,7 +46,7 @@ class NsfwFilter:
             input_data = np.asarray(resized, dtype=np.float32) / 255.0
             input_data = np.expand_dims(input_data, axis=0)
 
-            scores = self._session.run(None, {self._input_name: input_data})[0][0]
+            scores = np.asarray(self._session.run(None, {self._input_name: input_data})[0])[0]
 
             nsfw_score = sum(float(scores[i]) for i in _NSFW_INDICES)
             return float(np.clip(nsfw_score, 0.0, 1.0))

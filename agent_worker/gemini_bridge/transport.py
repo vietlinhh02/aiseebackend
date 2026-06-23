@@ -8,14 +8,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Protocol
 
+from .state import AgentState
+
 
 def _get_running_loop() -> asyncio.AbstractEventLoop | None:
     try:
         return asyncio.get_running_loop()
     except RuntimeError:
         return None
-
-from .state import AgentState
 
 
 @dataclass(frozen=True, slots=True)
