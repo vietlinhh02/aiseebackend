@@ -102,6 +102,7 @@ class GeminiLiveSettings:
                         voice_name=self.voice,
                     ),
                 ),
+                language_code="vi",
             ),
             thinking_config=types.ThinkingConfig(
                 thinking_level=self._thinking_level(),
@@ -113,6 +114,12 @@ class GeminiLiveSettings:
                     silence_duration_ms=200,
                     prefix_padding_ms=100,
                 ),
+            ),
+            input_audio_transcription=types.AudioTranscriptionConfig(
+                language_codes=["vi-VN"],
+            ),
+            output_audio_transcription=types.AudioTranscriptionConfig(
+                language_codes=["vi-VN"],
             ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),
         )
