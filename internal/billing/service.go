@@ -260,23 +260,23 @@ func (s *Service) recordNavigationTrip(
 		endedAt = *input.EndedAt
 	}
 	trip := NavigationTripRow{
-		UserID:                   input.UserID,
-		DestinationQuery:         stringFromMeta(input.Metadata, "destination_query"),
-		DestinationName:          stringFromMeta(input.Metadata, "destination_name"),
-		OriginLat:                floatFromMeta(input.Metadata, "origin_lat"),
-		OriginLng:                floatFromMeta(input.Metadata, "origin_lng"),
-		DestinationLat:           floatFromMeta(input.Metadata, "destination_lat"),
-		DestinationLng:           floatFromMeta(input.Metadata, "destination_lng"),
-		TotalDistanceM:           floatFromMeta(input.Metadata, "total_distance_m"),
-		TotalDurationEstimatedS:  floatFromMeta(input.Metadata, "total_duration_estimated_s"),
-		ActualDurationS:          int(floatFromMeta(input.Metadata, "actual_duration_s")),
-		TotalSteps:               int(floatFromMeta(input.Metadata, "total_steps")),
-		StepsCompleted:           int(floatFromMeta(input.Metadata, "steps_completed")),
-		DeviationCount:           int(floatFromMeta(input.Metadata, "deviation_count")),
-		Outcome:                  stringFromMeta(input.Metadata, "outcome"),
-		Mode:                     stringFromMeta(input.Metadata, "mode"),
-		StartedAt:                startedAt,
-		EndedAt:                  endedAt,
+		UserID:                  input.UserID,
+		DestinationQuery:        stringFromMeta(input.Metadata, "destination_query"),
+		DestinationName:         stringFromMeta(input.Metadata, "destination_name"),
+		OriginLat:               floatFromMeta(input.Metadata, "origin_lat"),
+		OriginLng:               floatFromMeta(input.Metadata, "origin_lng"),
+		DestinationLat:          floatFromMeta(input.Metadata, "destination_lat"),
+		DestinationLng:          floatFromMeta(input.Metadata, "destination_lng"),
+		TotalDistanceM:          floatFromMeta(input.Metadata, "total_distance_m"),
+		TotalDurationEstimatedS: floatFromMeta(input.Metadata, "total_duration_estimated_s"),
+		ActualDurationS:         int(floatFromMeta(input.Metadata, "actual_duration_s")),
+		TotalSteps:              int(floatFromMeta(input.Metadata, "total_steps")),
+		StepsCompleted:          int(floatFromMeta(input.Metadata, "steps_completed")),
+		DeviationCount:          int(floatFromMeta(input.Metadata, "deviation_count")),
+		Outcome:                 stringFromMeta(input.Metadata, "outcome"),
+		Mode:                    stringFromMeta(input.Metadata, "mode"),
+		StartedAt:               startedAt,
+		EndedAt:                 endedAt,
 	}
 	if err := navStore.WriteNavigationTrip(ctx, trip); err != nil {
 		// best-effort: log but don't propagate
@@ -552,82 +552,6 @@ func (s *Service) currentCareGroupUsage(
 	return s.usageForUsers(ctx, sub, plan, entitlements, caredUserIDs)
 }
 
-func (s *Service) usageForUser(
-	ctx context.Context,
-	sub *Subscription,
-	userID string,
-	plan Plan,
-	entitlements []Entitlement,
-) (UsageResponse, error) {
-	now := time.Now().UTC()
-	start, end := monthBounds(now)
-	usageTotals, err := s.store.UsageTotals(ctx, userID, start, end)
-	if err != nil {
-		return UsageResponse{}, err
-	}
-	grantTotals, err := s.store.UsageGrantTotals(ctx, userID, start, end)
-	if err != nil {
-		return UsageResponse{}, err
-	}
-
-	resp := UsageResponse{
-		Plan:        summarizeEffectivePlan(sub, plan),
-		Quotas:      make(map[UsageType]UsageQuota),
-		TopUsage:    append([]UsageTotal(nil), usageTotals...),
-		PeriodStart: start,
-		PeriodEnd:   end,
-		AsOf:        now,
-	}
-	periodCache := map[string]periodTotals{
-		periodKey(start, end): {
-			usageByType: totalsByType(usageTotals),
-			grantByType: totalsByType(grantTotals),
-		},
-	}
-
-	for _, entitlement := range entitlements {
-		usageType, ok := entitlementUsageType(entitlement.FeatureKey)
-		if !ok {
-			continue
-		}
-		quotaStart, quotaEnd := boundsForResetPeriod(
-			now, entitlement.ResetPeriod,
-		)
-		totals, err := s.totalsForPeriod(
-			ctx, userID, quotaStart, quotaEnd, periodCache,
-		)
-		if err != nil {
-			return UsageResponse{}, err
-		}
-		limit, unlimited := entitlementNumericLimit(entitlement.LimitValue)
-		used := totals.usageByType[usageType].Quantity
-		granted := totals.grantByType[usageType].Quantity
-		var remaining float64
-		if !unlimited {
-			remaining = roundQuantity(limit + granted - used)
-			if remaining < 0 {
-				remaining = 0
-			}
-		}
-		resp.Quotas[usageType] = UsageQuota{
-			UsageType:        usageType,
-			FeatureKey:       entitlement.FeatureKey,
-			Limit:            limit,
-			Used:             roundQuantity(used),
-			Granted:          roundQuantity(granted),
-			Remaining:        remaining,
-			Unit:             entitlement.LimitUnit,
-			ResetPeriod:      entitlement.ResetPeriod,
-			Unlimited:        unlimited,
-			UpgradeSuggested: shouldSuggestUpgrade(limit, used, unlimited),
-		}
-	}
-	sort.Slice(resp.TopUsage, func(i, j int) bool {
-		return resp.TopUsage[i].Quantity > resp.TopUsage[j].Quantity
-	})
-	return resp, nil
-}
-
 func (s *Service) usageForUsers(
 	ctx context.Context,
 	sub *Subscription,
@@ -702,33 +626,6 @@ func (s *Service) usageForUsers(
 		return resp.TopUsage[i].Quantity > resp.TopUsage[j].Quantity
 	})
 	return resp, nil
-}
-
-func (s *Service) totalsForPeriod(
-	ctx context.Context,
-	userID string,
-	start time.Time,
-	end time.Time,
-	cache map[string]periodTotals,
-) (periodTotals, error) {
-	key := periodKey(start, end)
-	if totals, ok := cache[key]; ok {
-		return totals, nil
-	}
-	usageTotals, err := s.store.UsageTotals(ctx, userID, start, end)
-	if err != nil {
-		return periodTotals{}, err
-	}
-	grantTotals, err := s.store.UsageGrantTotals(ctx, userID, start, end)
-	if err != nil {
-		return periodTotals{}, err
-	}
-	totals := periodTotals{
-		usageByType: totalsByType(usageTotals),
-		grantByType: totalsByType(grantTotals),
-	}
-	cache[key] = totals
-	return totals, nil
 }
 
 func (s *Service) totalsForUsersPeriod(
