@@ -135,7 +135,7 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 		lastUpstreamErr = result.err
 
 		if attempt < b.MaxRetries {
-			upstreamConn.CloseNow()
+			_ = upstreamConn.CloseNow()
 			wg.Wait()
 			continue
 		}
@@ -149,7 +149,7 @@ func (b *WebSocketBridge) Proxy(ctx context.Context, session Session, clientConn
 			slog.Warn("bridge_error_write_failed", "error", err)
 		}
 		_ = clientConn.Close(websocket.StatusNormalClosure, "assistant disconnected")
-		upstreamConn.CloseNow()
+		_ = upstreamConn.CloseNow()
 		wg.Wait()
 		return lastUpstreamErr
 	}
@@ -163,7 +163,7 @@ func (b *WebSocketBridge) dialUpstream(ctx context.Context, session Session) (*w
 	upstreamConn.SetReadLimit(BridgeReadLimit)
 
 	if err := wsjson.Write(ctx, upstreamConn, sessionInitEnvelope(session)); err != nil {
-		upstreamConn.CloseNow()
+		_ = upstreamConn.CloseNow()
 		return nil, fmt.Errorf("send assistant init frame: %w", err)
 	}
 

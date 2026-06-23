@@ -20,10 +20,10 @@ const (
 )
 
 var (
-	ErrDailyAdLimitReached = errors.New("đã đạt giới hạn quảng cáo hôm nay (50/ngày)")
-	ErrInsufficientBalance   = errors.New("số dư không đủ")
-	ErrInvalidRecipientID    = errors.New("mã người nhận không hợp lệ")
-	ErrReferralSelfRefer     = errors.New("không thể tự giới thiệu chính mình")
+	ErrDailyAdLimitReached    = errors.New("đã đạt giới hạn quảng cáo hôm nay (50/ngày)")
+	ErrInsufficientBalance    = errors.New("số dư không đủ")
+	ErrInvalidRecipientID     = errors.New("mã người nhận không hợp lệ")
+	ErrReferralSelfRefer      = errors.New("không thể tự giới thiệu chính mình")
 	ErrReferralAlreadyClaimed = errors.New("bạn đã được giới thiệu trước đó")
 )
 
@@ -171,7 +171,7 @@ func (s *Service) WatchAd(ctx context.Context, userID pgtype.UUID) (*WatchAdResp
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.queries.WithTx(tx)
 
@@ -239,7 +239,7 @@ func (s *Service) Redeem(ctx context.Context, userID pgtype.UUID, req RedeemRequ
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := s.queries.WithTx(tx)
 
@@ -444,7 +444,7 @@ func (s *Service) ClaimReferral(ctx context.Context, refereeID pgtype.UUID, req 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO referrals (referrer_id, referee_id) VALUES ($1, $2)`,

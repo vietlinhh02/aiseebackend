@@ -316,7 +316,7 @@ func TestWebSocketProxySurfacesUpstreamDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	var envelope ServerEnvelope
 	if err := wsjson.Read(ctx, conn, &envelope); err != nil {
@@ -456,7 +456,7 @@ func newFakeAssistantUpstream(t *testing.T, session func(context.Context, *webso
 			done <- fmt.Errorf("accept upstream websocket: %w", err)
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(BridgeReadLimit)
 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)

@@ -94,7 +94,7 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 		slog.Error("assistant_ws_accept_failed", "error", err)
 		return
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	conn.SetReadLimit(BridgeReadLimit)
 
 	ctx := r.Context()
