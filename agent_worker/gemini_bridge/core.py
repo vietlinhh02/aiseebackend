@@ -115,12 +115,6 @@ class GeminiLiveSettings:
                     prefix_padding_ms=100,
                 ),
             ),
-            input_audio_transcription=types.AudioTranscriptionConfig(
-                language_codes=["vi-VN"],
-            ),
-            output_audio_transcription=types.AudioTranscriptionConfig(
-                language_codes=["vi-VN"],
-            ),
             tools=build_gemini_tools(enable_google_search=enable_google_search),
         )
 
